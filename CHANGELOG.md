@@ -17,6 +17,7 @@
 - M365 picker 與 upload control 會等待 hydration，避免新對話頁的暫態 `not found`。
 - M365 model／reasoning helper 可拆分同一行的主標籤與副標題，並支援 zh-TW `自動`、`快速回應`、`深度思考` 與 `上傳影像和檔案`。
 - M365 附件狀態可辨識 `upload in progress`、百分比、unsupported type、empty file、部分失敗與 retry，不再把 pending 或全域錯誤誤判成功。
+- M365 多附件折疊為 `+N` 時仍可辨識隱藏的附件 chip，並在上傳後以實際點擊建立編輯器游標，再輸入 prompt 與送出。
 - M365 純圖片回覆在明確指定 `--image-output` 時可略過空 Markdown，繼續下載最新 assistant generated image；無圖片仍回傳非零錯誤。
 
 ### ⚠️ 已知限制 (Known limitations)

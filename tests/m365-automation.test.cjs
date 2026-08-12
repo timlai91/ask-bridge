@@ -9,6 +9,7 @@ const {
   classifyComposerPrompt,
   extractCodeBlock,
   filterGeneratedImageDescriptors,
+  inspectAttachment,
 } = require('../src/m365-automation.cjs');
 
 test('matches M365 accept rules by MIME, wildcard, and extension', () => {
@@ -59,6 +60,42 @@ test('classifies attachment done, pending, error, policy, and authentication sta
     fileName: 'brief.pdf',
     authRedirect: true,
   }).status, 'authentication');
+});
+
+test('detects M365 attachment chips hidden by the overflow menu', () => {
+  const originalDocument = globalThis.document;
+  const originalWindow = globalThis.window;
+  const hiddenAttachment = {
+    innerText: 'hidden.cs',
+    textContent: 'hidden.cs',
+    getClientRects: () => [],
+    getAttribute: () => null,
+    querySelector: () => ({}),
+  };
+  const scope = {
+    querySelectorAll: () => [hiddenAttachment],
+  };
+
+  globalThis.document = {
+    querySelector: () => scope,
+    querySelectorAll: () => [],
+  };
+  globalThis.window = {
+    location: { hostname: 'm365.cloud.microsoft' },
+  };
+
+  try {
+    assert.deepEqual(inspectAttachment('hidden.cs'), {
+      status: 'done',
+      detail: 'hidden.cs',
+      removable: true,
+    });
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
 });
 
 test('requires one exact M365 prompt before submission', () => {
