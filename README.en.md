@@ -1,6 +1,6 @@
 # Ask Bridge 🦀
 
-`ask-bridge` is a powerful, lightweight command-line tool written in **Rust** that automates ChatGPT, Gemini or Claude directly in your real Chrome browser. It uses the **Model Context Protocol (MCP)** and **Chrome DevTools Protocol (CDP)** via the embedded `doggy8088/mcp-cli` Rust library dependency and `chrome-devtools-mcp` to control Chrome, input prompts, click submit, and print the response back to your terminal. ChatGPT is the default when no global provider is configured; use `--provider gemini`, `--provider claude`, or the global config file to switch providers.
+`ask-bridge` is a powerful, lightweight command-line tool written in **Rust** that automates ChatGPT, Gemini, Claude, or the experimental Microsoft 365 Copilot Chat directly in your real Chrome browser. It uses the **Model Context Protocol (MCP)** and **Chrome DevTools Protocol (CDP)** via the embedded `doggy8088/mcp-cli` Rust library dependency and `chrome-devtools-mcp` to control Chrome, input prompts, click submit, and print the response back to your terminal. ChatGPT is the default when no global provider is configured; use `--provider gemini`, `--provider claude`, `--provider m365`, or the global config file to switch providers.
 
 ## Design Intent
 
@@ -29,7 +29,7 @@ Unlike typical API clients, `ask-bridge` operates inside a real Chrome browser w
 ## 🌟 Key Features
 
 - **🦀 100% Rust Core**: Extremely fast, lightweight, and compile-once, run-anywhere binary.
-- **Multi-provider support**: Choose ChatGPT, Gemini, or Claude with `--provider chatgpt|gemini|claude`.
+- **Multi-provider support**: Choose ChatGPT, Gemini, Claude, or experimental Microsoft 365 Copilot with `--provider chatgpt|gemini|claude|m365`.
 - **Global provider config**: Set the default provider in `~/.config/ask-bridge/config.json`; CLI `--provider` overrides the config file.
 - **🌐 Real Browser Automation**: Directly interacts with Chrome on port `9223` (isolated debug profile).
 - **🔒 Persistent Login**: Uses a dedicated local profile directory (`~/.config/ask-bridge/chrome-profile`) so you never lose your login state.
@@ -37,9 +37,9 @@ Unlike typical API clients, `ask-bridge` operates inside a real Chrome browser w
 - **🌀 TUI Thinking Animation**: Displays a rotating spinner while waiting for the provider to reply, then clears it once output starts.
 - **🧠 Intelligent Tab Management**: Reuses existing provider tabs if open, focuses them, or opens new ones, avoiding tab clutter.
 - **🖥️ Pipe & Stdin Support**: Supports piping prompts via `stdin` (e.g. `cat report.txt | ask-bridge "summarize this"`).
-- **📎 Image & File Attachments**: Attach local images with `--image` (supported on ChatGPT and Claude), or documents (PDF, Word, Excel, plain text, Markdown, JSON, etc.) with `--file`; Gemini currently supports `--file` and rejects `--image`.
-- **🔀 Model and Reasoning Selection**: Use `--model` for provider models and `--reasoning` for ChatGPT reasoning effort or Gemini Extended Thinking.
-- **Resume Conversations**: Use `--session`, `--session-id`, or `--session-url` to continue an existing provider conversation with a new terminal prompt.
+- **📎 Image & File Attachments**: Upload attachments with `--image`/`--file`; Windows experimental M365 V2 supports PNG/JPEG images, guarantees PDF/DOCX/TXT files, and dynamically tries other file formats.
+- **🔀 Model and Reasoning Selection**: Use `--model`/`--reasoning` for provider options; M365 V2 is enabled only on Windows.
+- **Resume Conversations**: ChatGPT, Gemini, and Claude support URLs and IDs; Windows experimental M365 V2 supports full conversation URLs only.
 - **Response Timeout**: Use `--timeout <seconds>` to control how long to wait for a provider response, defaulting to `300` seconds.
 - **🔍 Quiet by Default & Verbose Mode**: Quiet and clean output by default (displaying only the generated response), with an optional `--verbose` flag to display full browser state logs if needed.
 - **Version Info**: Use `-v` or `--version` to print the current version number.
@@ -144,25 +144,29 @@ Before sending prompts, you need to log in to the selected provider. ChatGPT is 
 ask-bridge login
 ```
 
-For Gemini or Claude:
+For Gemini, Claude, or Microsoft 365 Copilot:
 
 ```bash
 ask-bridge --provider gemini login
 ask-bridge --provider claude login
+ask-bridge --provider m365 login
 ```
 
 - This will automatically launch Google Chrome with a dedicated, persistent debug profile.
-- Log in manually to the selected provider page, such as `https://chatgpt.com/`, `https://gemini.google.com/app`, or `https://claude.ai/new`.
+- Log in manually to the selected provider page, such as `https://chatgpt.com/`, `https://gemini.google.com/app`, `https://claude.ai/new`, or `https://m365.cloud.microsoft/chat`.
 - The tool now checks login status every second automatically, so you can stay on the browser and it will return immediately after login is detected.
 - If login is not detected within `--timeout` seconds (default: 300), it will warn you to verify the result and retry.
 
+M365 login always uses a visible Chrome window so you can complete Microsoft Entra, MFA, or Conditional Access checks. The tool never attempts to bypass organization policy.
+
 #### Global Provider Config
 
-To use Gemini or Claude by default when `--provider` is not specified:
+To use Gemini, Claude, or M365 by default when `--provider` is not specified:
 
 ```bash
 ask-bridge config --provider gemini
 ask-bridge config --provider claude
+ask-bridge config --provider m365
 ```
 
 To switch the default back to ChatGPT:
@@ -191,11 +195,27 @@ Simply pass your prompt as an argument:
 ask-bridge "What is the difference between a struct and a tuple in Rust?"
 ask-bridge --provider gemini "What is the difference between a struct and a tuple in Rust?"
 ask-bridge --provider claude "What is the difference between a struct and a tuple in Rust?"
+ask-bridge --provider m365 "What is the difference between a struct and a tuple in Rust?"
 ```
 
 - Chrome will open or focus on your selected provider tab.
 - The prompt will be typed out and submitted.
 - The selected provider's response will be printed in your terminal.
+
+#### Experimental Microsoft 365 Copilot support
+
+The first M365 release supports text prompts, text or Markdown responses, `login`, `open`, `get`, `--new`, `--output`, and `--timeout`. The CLI prints the current page as a Thread Link after a query, but does not yet promise that the URL can be used for CLI session resume.
+
+**M365 V2 is Windows-only experimental.** Windows enables:
+
+- Full conversation URLs through `--session-url` or URL-form `--session`; raw `--session-id` remains unsupported.
+- Models `GPT 5.6`, `GPT 5.5`, `Sonnet`, and `Opus`.
+- Reasoning `auto`/`自動`, `quick`/`快速回應`, and `think-deeper`/`深度思考`.
+- PDF, DOCX, and TXT are guaranteed through `--file`; other formats are attempted according to the current M365 `accept` rules and tenant policy instead of being pre-blocked by the CLI.
+- PNG and JPEG through `--image`.
+- Explicit latest-assistant generated-image download through `--image-output`.
+
+macOS and Linux retain M365 text-only behavior; V2 flags fail before Chrome starts with a Windows-only experimental error. DLP/policy blocking has not been validated in a dedicated tenant and is an acknowledged limitation rather than a Windows release gate. If policy blocks an operation, the tool stops without attempting a bypass.
 
 ### 3. Open a Brand New Session (`--new`)
 
@@ -223,12 +243,22 @@ ask-bridge --session-url "https://chatgpt.com/c/conversation-uuid" "Produce the 
 ask-bridge --provider gemini --session "conversation-id" "Continue the analysis."
 ```
 
-`--session`, `--session-id`, and `--session-url` are aliases for the same option.
-An ID uses the selected or configured provider to build the conversation URL. A
-full URL identifies its provider automatically. The command stops before opening
+`--session`, `--session-id`, and `--session-url` are separate, mutually exclusive
+options. `--session` detects a full URL versus an ID, `--session-id` accepts only
+a raw ID, and `--session-url` accepts only a full HTTPS conversation URL. An ID
+uses the selected or configured provider to build the conversation URL. A full
+URL identifies its provider automatically. The command stops before opening
 Chrome when an explicitly selected provider conflicts with the URL, the URL does
 not belong to a supported provider, or `--new` is also supplied. Existing tabs
 are preserved.
+
+M365 V2 on Windows is URL-only; raw `--session-id` is unsupported:
+
+```powershell
+ask-bridge --provider m365 --session-url "https://m365.cloud.microsoft/chat/conversation/<id>" "Continue this conversation."
+```
+
+M365 session V2 flags remain unavailable on macOS and Linux.
 
 ### 5. Headless Mode (Default: True)
 
@@ -309,24 +339,26 @@ Instead of piping file contents into the prompt, you can upload local files as a
 
 #### Attach images
 
-Use `--image` (repeatable) to attach one or more local images. This currently supports ChatGPT and Claude; Gemini image input is not enabled and exits with an explicit error when used with `--provider gemini`.
+Use `--image` (repeatable) to attach one or more local images. ChatGPT and Claude retain their current support; Windows experimental M365 V2 supports PNG and JPEG. Gemini still rejects `--image`.
 
 ```bash
 ask-bridge "Describe this image." --image screenshot.png
 ask-bridge "Compare these two images." --image v1.png --image v2.png
 ask-bridge --provider claude "Describe this image." --image screenshot.png
+ask-bridge --provider m365 --new "Describe this image." --image screenshot.png
 ```
 
 Supported formats include PNG, JPEG, GIF, WebP, SVG, BMP, and more.
 
 #### Attach documents
 
-Use `--file` (repeatable) to attach documents such as PDF, Word, Excel, PowerPoint, plain text, Markdown, CSV, JSON, or source code. This flow supports ChatGPT, Gemini, and Claude.
+Use `--file` (repeatable) to attach documents. ChatGPT, Gemini, and Claude retain their existing formats. Windows experimental M365 V2 guarantees PDF, DOCX, and TXT; other formats are attempted according to the current M365 `accept` rules and tenant policy instead of being pre-blocked by the CLI.
 
 ```bash
 ask-bridge "Summarize this PDF." --file report.pdf
 ask-bridge "How many rows are in this CSV?" --file data.csv
 ask-bridge "Check this code for issues." --file src/main.rs
+ask-bridge --provider m365 --new "Summarize this document." --file report.pdf
 ```
 
 You can attach images and documents at the same time:
@@ -345,6 +377,8 @@ ask-bridge "Quickly translate this." --reasoning instant
 ask-bridge --provider gemini "Introduce Rust in a few sentences." --model "3.6 Flash"
 ask-bridge --provider gemini "Prove this math problem." --model "3.1 Pro" --reasoning extended
 ask-bridge --provider claude "Introduce Rust in a few sentences." --model Sonnet
+ask-bridge --provider m365 --new "Answer quickly." --reasoning quick
+ask-bridge --provider m365 --new "Use the selected model." --model "GPT 5.5"
 ```
 
 Argument rules:
@@ -352,6 +386,13 @@ Argument rules:
 - **ChatGPT**: `--reasoning` accepts `auto`, `instant`, `medium`, and `high`, plus the corresponding aliases `智慧`, `即時`, `中`, `中等`, and `高`.
 - **Gemini**: `--reasoning extended` selects Extended Thinking. Omit `--model` or combine it with an available Pro model.
 - **Claude**: `--reasoning` is unsupported. Existing Sonnet, Opus, and Haiku `--model` selection is unchanged.
+- **Microsoft 365 Copilot (Windows-only experimental)**: reasoning supports `auto`/`自動`, `quick`/`快速回應`, and `think-deeper`/`深度思考`; models support `GPT 5.6`, `GPT 5.5`, `Sonnet`, and `Opus`. They share one UI control and cannot be combined in one invocation. Use `--new` when an existing conversation has no visible picker.
+
+On Windows, M365 generated-image download runs only when `--image-output` is explicitly supplied; otherwise it does not scan or persist enterprise images.
+
+```powershell
+ask-bridge --provider m365 --image-output .\generated get "https://m365.cloud.microsoft/chat/conversation/<id>"
+```
 
 Model matching uses only each menu item's primary label and ignores subtitles and badges. It remains case- and punctuation-insensitive. The tool never maps an obsolete model version to a different version. If the primary label is unavailable, the error lists the provider options currently found and aborts before sending the prompt.
 
@@ -365,6 +406,7 @@ To quickly launch the browser and open the selected provider without sending any
 ask-bridge open
 ask-bridge --provider gemini open
 ask-bridge --provider claude open
+ask-bridge --provider m365 open
 ```
 
 ### 13. Close the Browser Instance

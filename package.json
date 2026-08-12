@@ -1,14 +1,14 @@
 {
   "name": "ask-bridge",
   "version": "0.2.10",
-  "description": "Automate ChatGPT, Gemini or Claude from the command line through Chrome.",
+  "description": "Automate ChatGPT, Gemini, Claude or Microsoft 365 Copilot from the command line through Chrome.",
   "bin": {
     "ask-bridge": "npm/cli.cjs",
     "ask": "npm/cli.cjs"
   },
   "scripts": {
     "postinstall": "node npm/postinstall.cjs",
-    "test": "node --test tests/postinstall.test.cjs tests/model-selection.test.cjs",
+    "test": "node --test tests/postinstall.test.cjs tests/model-selection.test.cjs tests/m365-automation.test.cjs",
     "prepublishOnly": "npm test && npm pack --dry-run && node npm/prepublish-check.cjs"
   },
   "files": [
@@ -26,6 +26,9 @@
     "chatgpt",
     "gemini",
     "claude",
+    "m365",
+    "microsoft-365",
+    "copilot",
     "chrome",
     "rust",
     "cli"
