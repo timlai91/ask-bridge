@@ -7,6 +7,7 @@ const {
   acceptsFile,
   classifyAttachmentSignals,
   classifyComposerPrompt,
+  extractCodeBlock,
   filterGeneratedImageDescriptors,
 } = require('../src/m365-automation.cjs');
 
@@ -85,6 +86,63 @@ test('requires one exact M365 prompt before submission', () => {
     ).status,
     'ready',
   );
+});
+
+test('extracts localized virtualized M365 code blocks without line numbers', () => {
+  const lines = [
+    {
+      innerText: 'private readonly IFileDiscoveryService _fileDiscovery;',
+      getAttribute: (name) => (name === 'data-line-index' ? '0' : null),
+    },
+    {
+      innerText: '',
+      getAttribute: (name) => (name === 'data-line-index' ? '1' : null),
+    },
+    {
+      innerText: 'await ProtectFileAsync(file, ct);',
+      getAttribute: (name) => (name === 'data-line-index' ? '2' : null),
+    },
+  ];
+  const editor = {
+    innerText: '1\nprivate readonly IFileDiscoveryService _fileDiscovery;\n2\n\n3\nawait ProtectFileAsync(file, ct);',
+    getAttribute: (name) => ({
+      role: 'textbox',
+      'aria-label': '程式碼編輯器',
+      'aria-readonly': 'true',
+      'aria-multiline': 'true',
+    })[name] || null,
+    querySelector: () => null,
+    querySelectorAll: (selector) => (selector === '[data-line-index]' ? lines : []),
+  };
+  const languageBadge = {
+    innerText: 'C#',
+    getAttribute: (name) => (name === 'aria-label' ? 'C#' : null),
+  };
+  const block = {
+    children: [],
+    getAttribute: () => null,
+    querySelector: (selector) => (
+      selector.includes('#language-badge') ? languageBadge : editor
+    ),
+    querySelectorAll: () => [],
+  };
+
+  assert.deepEqual(extractCodeBlock(block), {
+    language: 'csharp',
+    code: [
+      'private readonly IFileDiscoveryService _fileDiscovery;',
+      '',
+      'await ProtectFileAsync(file, ct);',
+    ].join('\n'),
+  });
+  assert.deepEqual(extractCodeBlock(editor), {
+    language: '',
+    code: [
+      'private readonly IFileDiscoveryService _fileDiscovery;',
+      '',
+      'await ProtectFileAsync(file, ct);',
+    ].join('\n'),
+  });
 });
 
 test('keeps only generated images and excludes UI or user attachment images', () => {

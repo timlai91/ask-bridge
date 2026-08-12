@@ -50,6 +50,130 @@
     };
   }
 
+  function normalizeCodeLanguage(value) {
+    const language = normalizeText(value)
+      .replace(/^language\s*[:=-]?\s*/i, '')
+      .toLowerCase();
+    const aliases = {
+      'c#': 'csharp',
+      'c++': 'cpp',
+      'f#': 'fsharp',
+      'objective-c': 'objectivec',
+      'shell script': 'shell',
+    };
+    const normalized = aliases[language] || language.replace(/\s+/g, '');
+    return /^[a-z0-9+#._-]{1,30}$/.test(normalized) ? normalized : '';
+  }
+
+  function normalizeCodeText(value) {
+    return String(value || '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[\u200b-\u200d\u2060\ufeff]/g, '')
+      .replace(/^\n+|\n+$/g, '');
+  }
+
+  function isCodeEditor(element) {
+    if (!element || typeof element.getAttribute !== 'function') return false;
+    if (element.getAttribute('role') !== 'textbox') return false;
+    const label = element.getAttribute('aria-label') || '';
+    return element.getAttribute('aria-readonly') === 'true'
+      || element.getAttribute('aria-multiline') === 'true'
+      || /code editor|程式碼編輯器|代码编辑器|コードエディター|코드 편집기/i.test(label);
+  }
+
+  function extractCodeBlock(element) {
+    if (!element) return { language: '', code: '' };
+
+    const languageBadge = element.querySelector
+      ? element.querySelector([
+        '#language-badge',
+        '[data-testid*="language-badge" i]',
+        '[data-testid*="code-language" i]',
+        '[class*="language-badge" i]',
+      ].join(', '))
+      : null;
+    const languageCandidates = [
+      languageBadge?.getAttribute?.('aria-label'),
+      languageBadge?.innerText,
+      languageBadge?.textContent,
+      ...(isCodeEditor(element)
+        ? []
+        : Array.from(element.children || [])
+          .map((child) => child.innerText || child.textContent || '')),
+    ];
+    const language = languageCandidates
+      .map(normalizeCodeLanguage)
+      .find(Boolean) || '';
+
+    const editorSelector = [
+      '[role="textbox"][aria-readonly="true"]',
+      '[role="textbox"][aria-multiline="true"]',
+      '[role="textbox"][aria-label*="code editor" i]',
+      '[role="textbox"][aria-label*="程式碼編輯器"]',
+      '[role="textbox"][aria-label*="代码编辑器"]',
+      '[role="textbox"][aria-label*="コードエディター"]',
+      '[role="textbox"][aria-label*="코드 편집기"]',
+      '[data-testid*="code-editor" i]',
+      'textarea',
+    ].join(', ');
+    const editor = isCodeEditor(element)
+      ? element
+      : element.querySelector?.(editorSelector);
+    const lineScope = editor || element;
+    const indexedLines = Array.from(
+      lineScope.querySelectorAll?.('[data-line-index]') || [],
+    )
+      .map((line, position) => ({
+        index: Number.parseInt(line.getAttribute?.('data-line-index') || '', 10),
+        position,
+        text: line.innerText ?? line.textContent ?? '',
+      }))
+      .sort((left, right) => {
+        const leftIndex = Number.isFinite(left.index) ? left.index : left.position;
+        const rightIndex = Number.isFinite(right.index) ? right.index : right.position;
+        return leftIndex - rightIndex;
+      });
+
+    let code = '';
+    if (indexedLines.length > 0) {
+      const seen = new Set();
+      code = indexedLines
+        .filter((line) => {
+          const key = Number.isFinite(line.index) ? line.index : line.position;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .map((line) => line.text)
+        .join('\n');
+    } else {
+      const viewLines = Array.from(
+        lineScope.querySelectorAll?.('.view-lines .view-line, .view-line') || [],
+      );
+      if (viewLines.length > 0) {
+        code = viewLines
+          .map((line) => line.innerText ?? line.textContent ?? '')
+          .join('\n');
+      } else if (typeof editor?.value === 'string' && editor.value) {
+        code = editor.value;
+      } else {
+        const codeElement = lineScope.querySelector?.('pre code, code');
+        code = codeElement?.textContent
+          ?? editor?.innerText
+          ?? editor?.textContent
+          ?? lineScope.innerText
+          ?? lineScope.textContent
+          ?? '';
+      }
+    }
+
+    return {
+      language,
+      code: normalizeCodeText(code),
+    };
+  }
+
   function acceptsFile(accept, file) {
     const rules = String(accept || '')
       .split(',')
@@ -245,6 +369,7 @@
     acceptsFile,
     classifyAttachmentSignals,
     classifyComposerPrompt,
+    extractCodeBlock,
     filterGeneratedImageDescriptors,
     generatedImagesFromLatestTurn,
     inspectAttachment,

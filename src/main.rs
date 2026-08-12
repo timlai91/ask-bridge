@@ -5339,14 +5339,69 @@ fn scrape_latest_markdown_from_dom(
         .map_err(|e| format!("Failed to serialize response selector: {}", e))?;
     let content_selector = serde_json::to_string(provider.response_content_selector())
         .map_err(|e| format!("Failed to serialize response content selector: {}", e))?;
-    let inspect_js = r#"() => {
+    let wait_for_m365_hydration = provider == Provider::M365Copilot;
+    let inspect_js = r#"async () => {
+        __M365_HELPER__
         const latestSelector = __LATEST_SELECTOR__;
         const contentSelector = __CONTENT_SELECTOR__;
-        const messages = Array.from(document.querySelectorAll(latestSelector))
-            .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
-        const latest = messages[messages.length - 1];
+        const waitForM365Hydration = __WAIT_FOR_M365_HYDRATION__;
+        const findLatest = () => {
+            const messages = Array.from(document.querySelectorAll(latestSelector))
+                .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
+            return messages[messages.length - 1] || null;
+        };
+        const findTurn = () => {
+            const latest = findLatest();
+            return latest
+                ? (contentSelector ? (latest.querySelector(contentSelector) || latest) : latest)
+                : null;
+        };
+
+        if (waitForM365Hydration) {
+            const sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
+            let previousSignature = '';
+            let stableSamples = 0;
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+                const currentTurn = findTurn();
+                const textLength = (currentTurn?.innerText || currentTurn?.textContent || '').trim().length;
+                const codeBlocks = currentTurn
+                    ? Array.from(currentTurn.querySelectorAll('.scriptor-component-code-block'))
+                    : [];
+                const hydratedCodeBlocks = codeBlocks.filter((block) => block.querySelector(
+                    '[data-line-index], .view-line, [role="textbox"][aria-readonly="true"], ' +
+                    '[role="textbox"][aria-multiline="true"], textarea, pre code'
+                )).length;
+                const signature = currentTurn
+                    ? [
+                        textLength,
+                        currentTurn.childElementCount,
+                        codeBlocks.length,
+                        hydratedCodeBlocks,
+                        currentTurn.querySelectorAll('[data-line-index], .view-line').length
+                    ].join(':')
+                    : '';
+
+                stableSamples = signature && signature === previousSignature
+                    ? stableSamples + 1
+                    : 0;
+                previousSignature = signature;
+
+                const codeBlocksReady = codeBlocks.length > 0 &&
+                    hydratedCodeBlocks === codeBlocks.length &&
+                    stableSamples >= 3;
+                const responseWithoutCodeIsStable = codeBlocks.length === 0 &&
+                    textLength > 0 &&
+                    stableSamples >= 30;
+                if (codeBlocksReady || responseWithoutCodeIsStable) {
+                    break;
+                }
+                await sleep(100);
+            }
+        }
+
+        const latest = findLatest();
         if (!latest) return 'No assistant message found';
-        const turn = contentSelector ? (latest.querySelector(contentSelector) || latest) : latest;
+        const turn = findTurn();
         
         const elementToMarkdown = (element) => {
             let markdown = '';
@@ -5402,29 +5457,21 @@ fn scrape_latest_markdown_from_dom(
                 }
 
                 if (node.classList.contains('scriptor-component-code-block')) {
-                    const editor = node.querySelector('[role="textbox"][aria-label="Code editor"]');
-                    const language = Array.from(node.children)
-                        .map((child) => (child.innerText || child.textContent || '').trim())
-                        .find((text) => /^[A-Za-z0-9+#._-]{1,20}$/.test(text)) || '';
-                    const codeText = editor?.lastElementChild?.innerText ||
-                        editor?.lastElementChild?.textContent ||
-                        editor?.innerText ||
-                        editor?.textContent ||
-                        '';
-                    markdown += '\n```' + language.toLowerCase() + '\n' + codeText + '\n```\n';
+                    const codeBlock = globalThis.AskBridgeM365Automation.extractCodeBlock(node);
+                    markdown += '\n```' + codeBlock.language + '\n' + codeBlock.code + '\n```\n';
                     return;
                 }
 
                 // M365 renders fenced code in a read-only textbox instead of pre/code.
                 if (node.getAttribute('role') === 'textbox' &&
-                    /code editor/i.test(node.getAttribute('aria-label') || '') &&
+                    (node.getAttribute('aria-readonly') === 'true' ||
+                        node.getAttribute('aria-multiline') === 'true' ||
+                        /code editor|程式碼編輯器|代码编辑器|コードエディター|코드 편집기/i.test(
+                            node.getAttribute('aria-label') || ''
+                        )) &&
                     !node.isContentEditable) {
-                    const codeText = node.lastElementChild?.innerText ||
-                        node.lastElementChild?.textContent ||
-                        node.innerText ||
-                        node.textContent ||
-                        '';
-                    markdown += '\n```\n' + codeText + '\n```\n';
+                    const codeBlock = globalThis.AskBridgeM365Automation.extractCodeBlock(node);
+                    markdown += '\n```' + codeBlock.language + '\n' + codeBlock.code + '\n```\n';
                     return;
                 }
 
@@ -5505,8 +5552,17 @@ fn scrape_latest_markdown_from_dom(
         
         return elementToMarkdown(turn);
     }"#
+    .replace("__M365_HELPER__", include_str!("m365-automation.cjs"))
     .replace("__LATEST_SELECTOR__", &latest_selector)
-    .replace("__CONTENT_SELECTOR__", &content_selector);
+    .replace("__CONTENT_SELECTOR__", &content_selector)
+    .replace(
+        "__WAIT_FOR_M365_HYDRATION__",
+        if wait_for_m365_hydration {
+            "true"
+        } else {
+            "false"
+        },
+    );
 
     let res = call_mcp_tool(
         config_path,
