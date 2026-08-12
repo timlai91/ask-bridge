@@ -264,7 +264,8 @@
       '[role="progressbar"]',
     ].join(', ');
     const elements = scope
-      ? Array.from(scope.querySelectorAll(selectors)).filter(isVisible)
+      // Overflowed attachment chips remain in the DOM with display:none.
+      ? Array.from(scope.querySelectorAll(selectors))
       : [];
     const entries = elements.map((element) => {
       const removeButton = element.querySelector
