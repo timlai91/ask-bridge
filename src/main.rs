@@ -59,6 +59,36 @@ enum Provider {
     Gemini,
     #[value(name = "claude")]
     Claude,
+    #[value(name = "m365")]
+    M365Copilot,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionSupport {
+    None,
+    UrlOnly,
+    UrlAndId,
+}
+
+impl SessionSupport {
+    fn supports_url(self) -> bool {
+        matches!(self, SessionSupport::UrlOnly | SessionSupport::UrlAndId)
+    }
+
+    fn supports_id(self) -> bool {
+        self == SessionSupport::UrlAndId
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProviderCapabilities {
+    session: SessionSupport,
+    images: bool,
+    files: bool,
+    model_selection: bool,
+    reasoning: bool,
+    image_download: bool,
 }
 
 impl Provider {
@@ -67,6 +97,9 @@ impl Provider {
             "chatgpt" | "chat-gpt" | "chat_gpt" => Some(Provider::ChatGpt),
             "gemini" => Some(Provider::Gemini),
             "claude" | "claude-ai" | "claude_ai" | "claudeai" => Some(Provider::Claude),
+            "m365" | "m365-copilot" | "m365_copilot" | "microsoft365" | "microsoft-365-copilot" => {
+                Some(Provider::M365Copilot)
+            }
             _ => None,
         }
     }
@@ -76,6 +109,7 @@ impl Provider {
             Provider::ChatGpt => "ChatGPT",
             Provider::Gemini => "Gemini",
             Provider::Claude => "Claude",
+            Provider::M365Copilot => "Microsoft 365 Copilot",
         }
     }
 
@@ -84,6 +118,52 @@ impl Provider {
             Provider::ChatGpt => "https://chatgpt.com/",
             Provider::Gemini => "https://gemini.google.com/app",
             Provider::Claude => "https://claude.ai/new",
+            Provider::M365Copilot => "https://m365.cloud.microsoft/chat",
+        }
+    }
+
+    fn capabilities(self) -> ProviderCapabilities {
+        self.capabilities_for_platform(cfg!(target_os = "windows"))
+    }
+
+    fn capabilities_for_platform(self, is_windows: bool) -> ProviderCapabilities {
+        match self {
+            Provider::ChatGpt => ProviderCapabilities {
+                session: SessionSupport::UrlAndId,
+                images: true,
+                files: true,
+                model_selection: true,
+                reasoning: true,
+                image_download: true,
+            },
+            Provider::Gemini => ProviderCapabilities {
+                session: SessionSupport::UrlAndId,
+                images: false,
+                files: true,
+                model_selection: true,
+                reasoning: true,
+                image_download: true,
+            },
+            Provider::Claude => ProviderCapabilities {
+                session: SessionSupport::UrlAndId,
+                images: true,
+                files: true,
+                model_selection: true,
+                reasoning: false,
+                image_download: true,
+            },
+            Provider::M365Copilot => ProviderCapabilities {
+                session: if is_windows {
+                    SessionSupport::UrlOnly
+                } else {
+                    SessionSupport::None
+                },
+                images: is_windows,
+                files: is_windows,
+                model_selection: is_windows,
+                reasoning: is_windows,
+                image_download: is_windows,
+            },
         }
     }
 
@@ -101,15 +181,20 @@ impl Provider {
             "chatgpt.com" | "www.chatgpt.com" => Some(Provider::ChatGpt),
             "gemini.google.com" => Some(Provider::Gemini),
             "claude.ai" | "www.claude.ai" => Some(Provider::Claude),
+            "m365.cloud.microsoft"
+            | "www.m365.cloud.microsoft"
+            | "m365copilot.com"
+            | "www.m365copilot.com" => Some(Provider::M365Copilot),
             _ => None,
         }
     }
 
-    fn conversation_url_from_id(self, session_id: &str) -> String {
+    fn conversation_url_from_id(self, session_id: &str) -> Option<String> {
         match self {
-            Provider::ChatGpt => format!("https://chatgpt.com/c/{session_id}"),
-            Provider::Gemini => format!("https://gemini.google.com/app/{session_id}"),
-            Provider::Claude => format!("https://claude.ai/chat/{session_id}"),
+            Provider::ChatGpt => Some(format!("https://chatgpt.com/c/{session_id}")),
+            Provider::Gemini => Some(format!("https://gemini.google.com/app/{session_id}")),
+            Provider::Claude => Some(format!("https://claude.ai/chat/{session_id}")),
+            Provider::M365Copilot => None,
         }
     }
 
@@ -122,15 +207,32 @@ impl Provider {
             .path_segments()
             .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
             .unwrap_or_default();
-        let marker = match self {
-            Provider::ChatGpt => "c",
-            Provider::Gemini => "app",
-            Provider::Claude => "chat",
-        };
-
-        path_segments
-            .windows(2)
-            .any(|segments| segments[0] == marker && !segments[1].is_empty())
+        match self {
+            Provider::ChatGpt => path_segments
+                .windows(2)
+                .any(|segments| segments[0] == "c" && !segments[1].is_empty()),
+            Provider::Gemini => path_segments
+                .windows(2)
+                .any(|segments| segments[0] == "app" && !segments[1].is_empty()),
+            Provider::Claude => path_segments
+                .windows(2)
+                .any(|segments| segments[0] == "chat" && !segments[1].is_empty()),
+            Provider::M365Copilot => {
+                url.username().is_empty()
+                    && url.password().is_none()
+                    && url.port().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+                    && matches!(
+                        url.host_str().map(str::to_ascii_lowercase).as_deref(),
+                        Some("m365.cloud.microsoft" | "www.m365.cloud.microsoft")
+                    )
+                    && path_segments.len() == 3
+                    && path_segments[0] == "chat"
+                    && path_segments[1] == "conversation"
+                    && valid_session_id(path_segments[2])
+            }
+        }
     }
 
     fn ready_check_js(self) -> &'static str {
@@ -152,6 +254,17 @@ impl Provider {
                            document.querySelector('[data-testid="login-with-google"]') !== null ||
                            window.location.pathname.startsWith('/login') ||
                            /Sign in|登入/.test(document.body.innerText || '');
+                }"#
+            }
+            Provider::M365Copilot => {
+                r#"() => {
+                    const host = window.location.hostname.toLowerCase();
+                    return host === 'login.microsoftonline.com' ||
+                           host === 'login.live.com' ||
+                           document.querySelector('#m365-chat-editor-target-element') !== null ||
+                           document.querySelector('#user-account-avatar') !== null ||
+                           document.querySelector('input[name="loginfmt"]') !== null ||
+                           document.querySelector('#idSIButton9') !== null;
                 }"#
             }
         }
@@ -304,6 +417,73 @@ impl Provider {
                     };
                 }"#
             }
+            Provider::M365Copilot => {
+                r#"async () => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            style.opacity !== '0' &&
+                            rect.width > 0 &&
+                            rect.height > 0;
+                    };
+
+                    const textFor = (el) => [
+                        el.getAttribute('aria-label'),
+                        el.getAttribute('title'),
+                        el.value,
+                        el.textContent
+                    ].filter(Boolean).join(' ').trim();
+
+                    const readSignals = () => {
+                        const host = window.location.hostname.toLowerCase();
+                        const authPath = host === 'login.microsoftonline.com' ||
+                            host === 'login.live.com' ||
+                            /\/(auth|login|signin|oauth2)(\/|$)/i.test(window.location.pathname);
+                        const composer = document.querySelector('#m365-chat-editor-target-element') ||
+                            document.querySelector('[role="textbox"][contenteditable="true"][aria-label*="Copilot"]');
+                        const account = document.querySelector('#user-account-avatar');
+                        const signIn = document.querySelector('input[name="loginfmt"]') ||
+                            document.querySelector('#idSIButton9') ||
+                            Array.from(document.querySelectorAll('a, button, input[type="submit"]'))
+                                .find((el) => isVisible(el) &&
+                                    /^(sign in|log in|登入|登錄|登录)$/i.test(textFor(el)));
+
+                        return {
+                            account: isVisible(account),
+                            auth_control: isVisible(signIn),
+                            auth_path: authPath,
+                            composer: isVisible(composer)
+                        };
+                    };
+
+                    let signals = readSignals();
+                    let signature = JSON.stringify(signals);
+                    const startedAt = Date.now();
+                    let stableSince = startedAt;
+                    let stable = false;
+                    const earliestDecision = startedAt + 1000;
+                    const deadline = startedAt + 5000;
+                    while (!signals.account && !signals.auth_path && Date.now() < deadline) {
+                        await new Promise((resolve) => setTimeout(resolve, 250));
+                        const nextSignals = readSignals();
+                        const nextSignature = JSON.stringify(nextSignals);
+                        if (nextSignature !== signature) {
+                            signature = nextSignature;
+                            stableSince = Date.now();
+                        }
+                        signals = nextSignals;
+                        if (Date.now() >= earliestDecision && Date.now() - stableSince >= 750) {
+                            stable = true;
+                            break;
+                        }
+                    }
+
+                    return { ...signals, stable };
+                }"#
+            }
         }
     }
 
@@ -312,6 +492,7 @@ impl Provider {
             Provider::ChatGpt => "[data-message-author-role=\"assistant\"], .agent-turn",
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
+            Provider::M365Copilot => "[data-testid=\"copilot-message-div\"]",
         }
     }
 
@@ -322,6 +503,7 @@ impl Provider {
             }
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
+            Provider::M365Copilot => "[data-testid=\"copilot-message-div\"]",
         }
     }
 
@@ -332,6 +514,9 @@ impl Provider {
                 "message-content, .markdown, structured-content-container.model-response-text"
             }
             Provider::Claude => ".standard-markdown, .font-claude-response-body",
+            Provider::M365Copilot => {
+                "[data-testid=\"markdown-reply\"], [data-testid=\"lastChatMessage\"]"
+            }
         }
     }
 
@@ -351,6 +536,12 @@ impl Provider {
                     "div[contenteditable=\"true\"].ProseMirror",
                     "div[aria-label*=\"Claude\"][contenteditable=\"true\"]"
                 ]"#
+            }
+            Provider::M365Copilot => {
+                r##"[
+                    "#m365-chat-editor-target-element",
+                    "[role=\"textbox\"][contenteditable=\"true\"][aria-label*=\"Copilot\"]"
+                ]"##
             }
         }
     }
@@ -382,6 +573,13 @@ impl Provider {
                     "button[aria-label*=\"傳送\"]"
                 ]"#
             }
+            Provider::M365Copilot => {
+                r##"[
+                    "#m365-chat-input-shared-container button[type=\"submit\"][aria-label=\"Send\"]",
+                    "#m365-chat-input-shared-container button[type=\"submit\"][aria-label*=\"傳送\"]",
+                    "#m365-chat-input-shared-container button[type=\"submit\"][aria-label*=\"送出\"]"
+                ]"##
+            }
         }
     }
 
@@ -408,6 +606,14 @@ impl Provider {
                     "button[aria-label*=\"停止\"]"
                 ]"#
             }
+            Provider::M365Copilot => {
+                r##"[
+                    "#m365-chat-input-shared-container button[type=\"submit\"][aria-label=\"Stop generating\"]",
+                    "#m365-chat-input-shared-container button[type=\"submit\"][aria-label*=\"Stop\"]",
+                    "#m365-chat-input-shared-container button[type=\"submit\"][aria-label*=\"停止\"]",
+                    "#m365-chat-input-shared-container button[type=\"submit\"][aria-label*=\"取消\"]"
+                ]"##
+            }
         }
     }
 }
@@ -418,6 +624,7 @@ impl fmt::Display for Provider {
             Provider::ChatGpt => write!(f, "chatgpt"),
             Provider::Gemini => write!(f, "gemini"),
             Provider::Claude => write!(f, "claude"),
+            Provider::M365Copilot => write!(f, "m365"),
         }
     }
 }
@@ -429,6 +636,9 @@ enum ReasoningRequest {
     ChatGptMedium,
     ChatGptHigh,
     GeminiExtended,
+    M365Auto,
+    M365Quick,
+    M365ThinkDeeper,
 }
 
 impl ReasoningRequest {
@@ -439,6 +649,9 @@ impl ReasoningRequest {
             ReasoningRequest::ChatGptMedium => &["medium", "中", "中等"],
             ReasoningRequest::ChatGptHigh => &["high", "高"],
             ReasoningRequest::GeminiExtended => &["extended thinking", "延伸思考"],
+            ReasoningRequest::M365Auto => &["auto", "自動"],
+            ReasoningRequest::M365Quick => &["quick response", "快速回應", "快速回应"],
+            ReasoningRequest::M365ThinkDeeper => &["think deeper", "深度思考"],
         }
     }
 
@@ -486,6 +699,29 @@ fn parse_gemini_reasoning(value: &str) -> Option<ReasoningRequest> {
     }
 }
 
+fn parse_m365_reasoning(value: &str) -> Option<ReasoningRequest> {
+    match normalize_option_label(value).as_str() {
+        "auto" | "自動" => Some(ReasoningRequest::M365Auto),
+        "quick" | "quickresponse" | "快速回應" | "快速回应" => {
+            Some(ReasoningRequest::M365Quick)
+        }
+        "deep" | "deeper" | "thinkdeeper" | "深度思考" => {
+            Some(ReasoningRequest::M365ThinkDeeper)
+        }
+        _ => None,
+    }
+}
+
+fn canonical_m365_model(value: &str) -> Option<&'static str> {
+    match normalize_option_label(value).as_str() {
+        "gpt56" => Some("GPT 5.6"),
+        "gpt55" => Some("GPT 5.5"),
+        "sonnet" | "claudesonnet" => Some("Sonnet"),
+        "opus" | "claudeopus" => Some("Opus"),
+        _ => None,
+    }
+}
+
 fn is_gemini_pro_model(model: &str) -> bool {
     let normalized = normalize_option_label(model);
     if normalized == "pro" {
@@ -506,7 +742,25 @@ fn resolve_selection_plan(
     if raw_model == Some("") {
         return Err("Empty model name".to_string());
     }
-    let model = raw_model.map(str::to_string);
+    let legacy_reasoning = match (provider, raw_model) {
+        (Provider::ChatGpt, Some(value)) => parse_chatgpt_reasoning(value),
+        (Provider::Gemini, Some(value)) => parse_gemini_reasoning(value),
+        (Provider::M365Copilot, Some(value)) => parse_m365_reasoning(value),
+        (Provider::Claude, _) | (_, None) => None,
+    };
+    let model = match (provider, raw_model) {
+        (_, Some(value)) if legacy_reasoning.is_some() => Some(value.to_string()),
+        (Provider::M365Copilot, Some(value)) => Some(
+            canonical_m365_model(value)
+                .ok_or_else(|| {
+                    format!(
+                        "Unsupported Microsoft 365 Copilot model '{value}'. Observed values: GPT 5.6, GPT 5.5, Sonnet, Opus"
+                    )
+                })?
+                .to_string(),
+        ),
+        (_, value) => value.map(str::to_string),
+    };
 
     let raw_reasoning = reasoning.map(str::trim);
     if raw_reasoning == Some("") {
@@ -529,12 +783,13 @@ fn resolve_selection_plan(
                     .to_string(),
             );
         }
-    };
-
-    let legacy_reasoning = match (provider, model.as_deref()) {
-        (Provider::ChatGpt, Some(value)) => parse_chatgpt_reasoning(value),
-        (Provider::Gemini, Some(value)) => parse_gemini_reasoning(value),
-        (Provider::Claude, _) | (_, None) => None,
+        (Provider::M365Copilot, Some(value)) => {
+            Some(parse_m365_reasoning(value).ok_or_else(|| {
+                format!(
+                    "Unsupported Microsoft 365 Copilot reasoning '{value}'. Observed values: auto, quick, think-deeper"
+                )
+            })?)
+        }
     };
 
     if explicit_reasoning.is_some() && legacy_reasoning.is_some() {
@@ -558,6 +813,13 @@ fn resolve_selection_plan(
     {
         return Err(
             "Gemini Extended Thinking is incompatible with non-Pro models; omit --model or select a Pro model"
+                .to_string(),
+        );
+    }
+
+    if provider == Provider::M365Copilot && model.is_some() && reasoning.is_some() {
+        return Err(
+            "Microsoft 365 Copilot model and reasoning options share one UI control and cannot be combined safely; choose either --model or --reasoning"
                 .to_string(),
         );
     }
@@ -609,7 +871,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 #[command(name = "ask-bridge")]
 #[command(version = "0.2.10")]
 #[command(disable_version_flag = true)]
-#[command(about = "AI browser CLI - Ask ChatGPT, Gemini or Claude from your Terminal with your subscription", long_about = None)]
+#[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -632,13 +894,31 @@ struct Cli {
     new: bool,
 
     /// Resume an existing conversation by provider session ID or full conversation URL.
+    /// M365 accepts full URLs only on Windows (experimental).
     #[arg(
         long = "session",
-        visible_aliases = ["session-id", "session-url"],
         value_name = "URL_OR_ID",
-        conflicts_with = "new"
+        conflicts_with_all = ["new", "session_id", "session_url"]
     )]
     session: Option<String>,
+
+    /// Resume an existing conversation by raw provider session ID.
+    /// M365 raw session IDs are unsupported.
+    #[arg(
+        long = "session-id",
+        value_name = "ID",
+        conflicts_with_all = ["new", "session", "session_url"]
+    )]
+    session_id: Option<String>,
+
+    /// Resume an existing conversation by full HTTPS conversation URL.
+    /// M365 support is Windows-only experimental.
+    #[arg(
+        long = "session-url",
+        value_name = "URL",
+        conflicts_with_all = ["new", "session", "session_id"]
+    )]
+    session_url: Option<String>,
 
     /// Print version information.
     #[arg(
@@ -658,15 +938,17 @@ struct Cli {
     output: Option<String>,
 
     /// Write the downloaded images to the specified folder or file path.
+    /// M365 support is Windows-only experimental and requires this explicit option.
     #[arg(long, short = 'i', value_name = "IMAGE_PATH")]
     image_output: Option<String>,
 
     /// Attach one or more local image files to the prompt (can be specified multiple times).
+    /// M365 supports PNG/JPEG on Windows (experimental).
     #[arg(long = "image", value_name = "IMAGE_FILE", num_args = 1)]
     images: Vec<String>,
 
     /// Attach one or more local document files (PDF, Word, Excel, text, etc.) to the prompt
-    /// (can be specified multiple times).
+    /// (can be specified multiple times). M365 supports PDF/DOCX/TXT on Windows (experimental).
     #[arg(long = "file", value_name = "FILE", num_args = 1)]
     files: Vec<String>,
 
@@ -676,12 +958,13 @@ struct Cli {
 
     /// Switch the provider model before sending the prompt.
     /// Match the primary menu label case- and punctuation-insensitively;
-    /// subtitles and badges are ignored.
+    /// subtitles and badges are ignored. M365 support is Windows-only experimental.
     #[arg(long = "model", value_name = "MODEL")]
     model: Option<String>,
 
     /// Select provider-specific reasoning separately from the model.
-    /// ChatGPT: auto, instant, medium, high. Gemini: extended. Claude: unsupported.
+    /// ChatGPT: auto, instant, medium, high. Gemini: extended.
+    /// M365 on Windows (experimental): auto, quick, think-deeper. Claude: unsupported.
     #[arg(long = "reasoning", value_name = "REASONING")]
     reasoning: Option<String>,
 }
@@ -759,7 +1042,7 @@ fn load_configured_provider() -> Result<Option<Provider>, String> {
 
     parse_configured_provider(&content).map_err(|e| {
         format!(
-            "{}. Expected format: {{\"provider\":\"chatgpt\"}} or {{\"provider\":\"gemini\"}}",
+            "{}. Expected format: {{\"provider\":\"chatgpt\"}}, {{\"provider\":\"gemini\"}}, {{\"provider\":\"claude\"}}, or {{\"provider\":\"m365\"}}",
             e
         )
     })
@@ -848,7 +1131,7 @@ fn run_config_command(cli_provider: Option<Provider>) -> Result<(), String> {
                 );
             }
             println!(
-                "Set default provider with: ask-bridge config --provider <chatgpt|gemini|claude>"
+                "Set default provider with: ask-bridge config --provider <chatgpt|gemini|claude|m365>"
             );
             println!("This is a one-time override example: ask-bridge --provider gemini <prompt>");
             Ok(())
@@ -939,53 +1222,132 @@ fn unique_new_page_id(before: &[Page], after: &[Page]) -> Result<usize, String> 
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionInputKind {
+    Auto,
+    Id,
+    Url,
+}
+
+impl SessionInputKind {
+    fn flag_name(self) -> &'static str {
+        match self {
+            SessionInputKind::Auto => "--session",
+            SessionInputKind::Id => "--session-id",
+            SessionInputKind::Url => "--session-url",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SessionInput<'a> {
+    kind: SessionInputKind,
+    value: &'a str,
+}
+
+fn session_input(cli: &Cli) -> Option<SessionInput<'_>> {
+    cli.session
+        .as_deref()
+        .map(|value| SessionInput {
+            kind: SessionInputKind::Auto,
+            value,
+        })
+        .or_else(|| {
+            cli.session_id.as_deref().map(|value| SessionInput {
+                kind: SessionInputKind::Id,
+                value,
+            })
+        })
+        .or_else(|| {
+            cli.session_url.as_deref().map(|value| SessionInput {
+                kind: SessionInputKind::Url,
+                value,
+            })
+        })
+}
+
+fn valid_session_id(session: &str) -> bool {
+    !session.is_empty()
+        && session.len() <= 256
+        && session
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn resolve_session_url_provider(
+    selected_provider: Provider,
+    provider_was_explicit: bool,
+    url: &Url,
+) -> Result<Provider, String> {
+    let session_provider = Provider::from_url(url.as_str()).ok_or_else(|| {
+        "Session URL must use HTTPS and belong to a supported provider host".to_string()
+    })?;
+    if !session_provider.owns_conversation_url(url) {
+        return Err(format!(
+            "session: URL is not a supported {} conversation URL",
+            session_provider.display_name()
+        ));
+    }
+    if provider_was_explicit && session_provider != selected_provider {
+        return Err(format!(
+            "Session URL belongs to {}, but --provider selected {}",
+            session_provider.display_name(),
+            selected_provider.display_name()
+        ));
+    }
+    Ok(session_provider)
+}
+
 fn resolve_session_target(
     selected_provider: Provider,
     provider_was_explicit: bool,
-    session: &str,
+    input: SessionInput<'_>,
 ) -> Result<(Provider, String), String> {
-    let session = session.trim();
+    let session = input.value.trim();
     if session.is_empty() {
         return Err("Session ID or URL cannot be empty".to_string());
     }
 
-    if let Ok(url) = Url::parse(session) {
-        let session_provider = Provider::from_url(url.as_str()).ok_or_else(|| {
-            "Session URL must use HTTPS and belong to chatgpt.com, gemini.google.com, or claude.ai"
-                .to_string()
-        })?;
-        if !session_provider.owns_conversation_url(&url) {
-            return Err(format!(
-                "URL is not a supported {} conversation URL",
-                session_provider.display_name()
-            ));
-        }
-        if provider_was_explicit && session_provider != selected_provider {
-            return Err(format!(
-                "Session URL belongs to {}, but --provider selected {}",
-                session_provider.display_name(),
-                selected_provider.display_name()
-            ));
-        }
+    let parsed_url = Url::parse(session).ok();
+    let treat_as_url = match input.kind {
+        SessionInputKind::Auto => parsed_url.is_some(),
+        SessionInputKind::Url => true,
+        SessionInputKind::Id => false,
+    };
 
+    if treat_as_url {
+        let url = parsed_url
+            .ok_or_else(|| "--session-url must be a full HTTPS conversation URL".to_string())?;
+        let session_provider =
+            resolve_session_url_provider(selected_provider, provider_was_explicit, &url)?;
         return Ok((session_provider, url.to_string()));
     }
 
-    if session.len() > 256
-        || !session
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
+    if !valid_session_id(session) {
         return Err(
             "Session ID may contain only ASCII letters, digits, hyphens, and underscores"
                 .to_string(),
         );
     }
 
-    Ok((
-        selected_provider,
-        selected_provider.conversation_url_from_id(session),
-    ))
+    if !selected_provider.capabilities().session.supports_id() {
+        return Err(format!(
+            "session: {} does not support raw session IDs for {}.",
+            selected_provider.display_name(),
+            input.kind.flag_name()
+        ));
+    }
+
+    let session_url = selected_provider
+        .conversation_url_from_id(session)
+        .ok_or_else(|| {
+            format!(
+                "session: {} does not support raw session IDs in this ask-bridge version.",
+                selected_provider.display_name()
+            )
+        })?;
+
+    Ok((selected_provider, session_url))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -993,6 +1355,51 @@ struct PageLoginState {
     id: usize,
     selected: bool,
     login_state: LoginState,
+}
+
+#[derive(Default)]
+struct ResponseCompletionTracker {
+    stable_done_checks: usize,
+    last_response_signature: Option<(u64, u64)>,
+}
+
+impl ResponseCompletionTracker {
+    fn observe(
+        &mut self,
+        status: &str,
+        is_new: bool,
+        content_length: u64,
+        content_hash: u64,
+        requires_text_stability: bool,
+    ) -> bool {
+        if status != "done" || !is_new {
+            self.stable_done_checks = 0;
+            if requires_text_stability {
+                self.last_response_signature = None;
+            }
+            return false;
+        }
+
+        if requires_text_stability {
+            if content_length == 0 {
+                self.stable_done_checks = 0;
+                self.last_response_signature = None;
+                return false;
+            }
+
+            let signature = (content_length, content_hash);
+            if self.last_response_signature == Some(signature) {
+                self.stable_done_checks += 1;
+            } else {
+                self.stable_done_checks = 1;
+                self.last_response_signature = Some(signature);
+            }
+        } else {
+            self.stable_done_checks += 1;
+        }
+
+        self.stable_done_checks >= 3
+    }
 }
 
 fn preferred_provider_page_id(pages: &[PageLoginState]) -> Option<usize> {
@@ -1951,6 +2358,16 @@ fn is_debug_chrome_background(profile_path: &str) -> bool {
         })
 }
 
+fn wait_for_debug_port_to_close() -> bool {
+    for _ in 0..50 {
+        if TcpStream::connect("127.0.0.1:9223").is_err() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
 fn close_ask_chrome_on_debug_port(profile_path: &str) -> Result<bool, String> {
     let snapshot = inspect_chrome_debug_port(profile_path);
     if snapshot.listener_pids.is_empty() {
@@ -1982,7 +2399,11 @@ fn close_ask_chrome_on_debug_port(profile_path: &str) -> Result<bool, String> {
     for pid in &snapshot.ask_pids {
         #[cfg(target_os = "windows")]
         {
-            let _ = Command::new("taskkill").args(["/PID", pid, "/T"]).status();
+            let _ = Command::new("taskkill")
+                .args(["/PID", pid, "/T"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -1990,12 +2411,36 @@ fn close_ask_chrome_on_debug_port(profile_path: &str) -> Result<bool, String> {
         }
     }
 
-    for _ in 0..50 {
-        if TcpStream::connect("127.0.0.1:9223").is_err() {
+    if wait_for_debug_port_to_close() {
+        let _ = remove_chrome_pid_file();
+        return Ok(true);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let current = inspect_chrome_debug_port(profile_path);
+        if current.listener_pids != snapshot.listener_pids
+            || current.browser_id != snapshot.browser_id
+            || current.ask_pids.is_empty()
+        {
+            return Err(
+                "The Chrome process on port 9223 changed while closing it; force termination was cancelled."
+                    .to_string(),
+            );
+        }
+
+        for pid in &current.ask_pids {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", pid, "/T"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+
+        if wait_for_debug_port_to_close() {
             let _ = remove_chrome_pid_file();
             return Ok(true);
         }
-        thread::sleep(Duration::from_millis(100));
     }
 
     Err("Timed out waiting for existing ask-bridge Chrome to stop".to_string())
@@ -2312,28 +2757,109 @@ fn render_markdown(markdown: &str, use_glow: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_provider_feature_support(provider: Provider, cli: &Cli) -> Result<(), String> {
-    if cli.session.is_some() && cli.command.is_some() {
+fn requested_m365_v2_flag(cli: &Cli) -> Option<&'static str> {
+    session_input(cli)
+        .map(|input| input.kind.flag_name())
+        .or_else(|| (!cli.images.is_empty()).then_some("--image"))
+        .or_else(|| (!cli.files.is_empty()).then_some("--file"))
+        .or_else(|| cli.model.is_some().then_some("--model"))
+        .or_else(|| cli.reasoning.is_some().then_some("--reasoning"))
+        .or_else(|| cli.image_output.is_some().then_some("--image-output"))
+}
+
+fn validate_provider_feature_support_for_platform(
+    provider: Provider,
+    cli: &Cli,
+    is_windows: bool,
+) -> Result<(), String> {
+    let session = session_input(cli);
+    if session.is_some() && cli.command.is_some() {
         return Err(
-            "--session is supported only for a prompt invocation, not with a subcommand"
+            "Session options are supported only for a prompt invocation, not with a subcommand"
                 .to_string(),
         );
     }
 
-    if provider == Provider::Gemini && !cli.images.is_empty() {
-        return Err(
-            "Gemini image attachments are not supported yet. Use --file for Gemini document attachments."
-                .to_string(),
-        );
+    if provider == Provider::M365Copilot
+        && !is_windows
+        && let Some(flag) = requested_m365_v2_flag(cli)
+    {
+        return Err(format!(
+            "Microsoft 365 Copilot V2 {flag} is Windows-only experimental in this ask-bridge version."
+        ));
+    }
+
+    let capabilities = provider.capabilities_for_platform(is_windows);
+    if let Some(input) = session {
+        let input_is_url = input.kind == SessionInputKind::Url
+            || (input.kind == SessionInputKind::Auto && Url::parse(input.value.trim()).is_ok());
+        if input_is_url && !capabilities.session.supports_url() {
+            return Err(format!(
+                "session: {} does not support conversation URLs for {} in this ask-bridge version.",
+                provider.display_name(),
+                input.kind.flag_name()
+            ));
+        }
+        if !input_is_url && !capabilities.session.supports_id() {
+            return Err(format!(
+                "session: {} does not support raw session IDs for {} in this ask-bridge version.",
+                provider.display_name(),
+                input.kind.flag_name()
+            ));
+        }
+    }
+    if !cli.images.is_empty() && !capabilities.images {
+        if provider == Provider::Gemini {
+            return Err(
+                "Gemini image attachments are not supported yet. Use --file for Gemini document attachments."
+                    .to_string(),
+            );
+        }
+        return Err(format!(
+            "{} does not support --image in this ask-bridge version.",
+            provider.display_name()
+        ));
+    }
+    if !cli.files.is_empty() && !capabilities.files {
+        return Err(format!(
+            "{} does not support --file in this ask-bridge version.",
+            provider.display_name()
+        ));
+    }
+    if cli.model.is_some() && !capabilities.model_selection {
+        return Err(format!(
+            "{} does not support --model in this ask-bridge version.",
+            provider.display_name()
+        ));
+    }
+    if cli.reasoning.is_some() && !capabilities.reasoning {
+        return Err(format!(
+            "{} does not support --reasoning in this ask-bridge version.",
+            provider.display_name()
+        ));
+    }
+    if cli.image_output.is_some() && !capabilities.image_download {
+        return Err(format!(
+            "{} does not support --image-output in this ask-bridge version.",
+            provider.display_name()
+        ));
     }
 
     Ok(())
+}
+
+fn validate_provider_feature_support(provider: Provider, cli: &Cli) -> Result<(), String> {
+    validate_provider_feature_support_for_platform(provider, cli, cfg!(target_os = "windows"))
 }
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+
+    fn session(kind: SessionInputKind, value: &str) -> SessionInput<'_> {
+        SessionInput { kind, value }
+    }
 
     #[test]
     fn validates_chrome_devtools_mcp_node_versions() {
@@ -2583,6 +3109,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_m365_provider_as_global_argument() {
+        let before = Cli::try_parse_from(["ask-bridge", "--provider", "m365", "login"]).unwrap();
+        assert_eq!(before.provider, Some(Provider::M365Copilot));
+        assert!(matches!(before.command, Some(Commands::Login)));
+
+        let after = Cli::try_parse_from(["ask-bridge", "login", "--provider", "m365"]).unwrap();
+        assert_eq!(after.provider, Some(Provider::M365Copilot));
+        assert!(matches!(after.command, Some(Commands::Login)));
+    }
+
+    #[test]
     fn parses_config_command() {
         let cli = Cli::try_parse_from(["ask-bridge", "config", "--provider", "gemini"]).unwrap();
         assert_eq!(cli.provider, Some(Provider::Gemini));
@@ -2630,6 +3167,20 @@ mod tests {
             parse_configured_provider(r#"{"provider":"claude-ai"}"#).unwrap(),
             Some(Provider::Claude)
         );
+        for alias in [
+            "m365",
+            "m365-copilot",
+            "m365_copilot",
+            "microsoft365",
+            "microsoft-365-copilot",
+        ] {
+            let config = format!(r#"{{"provider":"{alias}"}}"#);
+            assert_eq!(
+                parse_configured_provider(&config).unwrap(),
+                Some(Provider::M365Copilot)
+            );
+        }
+        assert_eq!(Provider::M365Copilot.to_string(), "m365");
         assert_eq!(parse_configured_provider(r#"{}"#).unwrap(), None);
     }
 
@@ -2686,6 +3237,7 @@ mod tests {
         assert!(help.contains("\n  login"));
         assert!(help.contains("\n  close"));
         assert!(help.contains("\n  update"));
+        assert!(help.contains("m365"));
     }
 
     #[test]
@@ -2742,7 +3294,7 @@ mod tests {
             "continue",
         ])
         .unwrap();
-        assert_eq!(cli.session.as_deref(), Some("conversation-123"));
+        assert_eq!(cli.session_id.as_deref(), Some("conversation-123"));
 
         assert!(
             Cli::try_parse_from([
@@ -2750,6 +3302,17 @@ mod tests {
                 "--new",
                 "--session",
                 "conversation-123",
+                "continue",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "ask-bridge",
+                "--session",
+                "conversation-123",
+                "--session-url",
+                "https://chatgpt.com/c/conversation-123",
                 "continue",
             ])
             .is_err()
@@ -2770,6 +3333,24 @@ mod tests {
             Provider::from_url("https://claude.ai/chat/abc"),
             Some(Provider::Claude)
         );
+        for url in [
+            "https://m365.cloud.microsoft/chat",
+            "https://www.m365.cloud.microsoft/chat",
+            "https://m365copilot.com",
+            "https://www.m365copilot.com/chat",
+        ] {
+            assert_eq!(Provider::from_url(url), Some(Provider::M365Copilot));
+        }
+        for url in [
+            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            "https://office.com/",
+            "https://www.office.com/",
+            "https://tenant.example.com/login",
+            "https://m365.cloud.microsoft.example.com/chat",
+            "http://m365.cloud.microsoft/chat",
+        ] {
+            assert_eq!(Provider::from_url(url), None);
+        }
         assert_eq!(Provider::from_url("https://example.com"), None);
         assert_eq!(
             Provider::from_url("https://example.com/?next=https://chatgpt.com/c/abc"),
@@ -2781,21 +3362,36 @@ mod tests {
     #[test]
     fn resolves_session_ids_for_each_provider() {
         assert_eq!(
-            resolve_session_target(Provider::ChatGpt, true, "chat-123").unwrap(),
+            resolve_session_target(
+                Provider::ChatGpt,
+                true,
+                session(SessionInputKind::Id, "chat-123"),
+            )
+            .unwrap(),
             (
                 Provider::ChatGpt,
                 "https://chatgpt.com/c/chat-123".to_string()
             )
         );
         assert_eq!(
-            resolve_session_target(Provider::Gemini, true, "gemini_123").unwrap(),
+            resolve_session_target(
+                Provider::Gemini,
+                true,
+                session(SessionInputKind::Id, "gemini_123"),
+            )
+            .unwrap(),
             (
                 Provider::Gemini,
                 "https://gemini.google.com/app/gemini_123".to_string()
             )
         );
         assert_eq!(
-            resolve_session_target(Provider::Claude, true, "claude-123").unwrap(),
+            resolve_session_target(
+                Provider::Claude,
+                true,
+                session(SessionInputKind::Id, "claude-123"),
+            )
+            .unwrap(),
             (
                 Provider::Claude,
                 "https://claude.ai/chat/claude-123".to_string()
@@ -2805,15 +3401,21 @@ mod tests {
 
     #[test]
     fn session_url_infers_provider_unless_cli_provider_conflicts() {
-        let target =
-            resolve_session_target(Provider::Gemini, false, "https://chatgpt.com/c/chat-123")
-                .unwrap();
+        let target = resolve_session_target(
+            Provider::Gemini,
+            false,
+            session(SessionInputKind::Url, "https://chatgpt.com/c/chat-123"),
+        )
+        .unwrap();
         assert_eq!(target.0, Provider::ChatGpt);
         assert_eq!(target.1, "https://chatgpt.com/c/chat-123");
 
-        let error =
-            resolve_session_target(Provider::Gemini, true, "https://chatgpt.com/c/chat-123")
-                .unwrap_err();
+        let error = resolve_session_target(
+            Provider::Gemini,
+            true,
+            session(SessionInputKind::Url, "https://chatgpt.com/c/chat-123"),
+        )
+        .unwrap_err();
         assert!(error.contains("but --provider selected Gemini"));
     }
 
@@ -2828,10 +3430,139 @@ mod tests {
             "chat/123",
         ] {
             assert!(
-                resolve_session_target(Provider::ChatGpt, false, invalid).is_err(),
+                resolve_session_target(
+                    Provider::ChatGpt,
+                    false,
+                    session(SessionInputKind::Auto, invalid),
+                )
+                .is_err(),
                 "expected {invalid:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn supports_m365_session_urls_but_rejects_raw_ids() {
+        let raw_error = resolve_session_target(
+            Provider::M365Copilot,
+            true,
+            session(SessionInputKind::Id, "conversation-123"),
+        )
+        .unwrap_err();
+        assert!(raw_error.contains("raw session IDs"));
+        assert!(raw_error.contains("--session-id"));
+
+        let url = Url::parse("https://m365.cloud.microsoft/chat/conversation/abc").unwrap();
+        assert!(Provider::M365Copilot.owns_conversation_url(&url));
+        assert_eq!(
+            resolve_session_target(
+                Provider::M365Copilot,
+                true,
+                session(SessionInputKind::Url, url.as_str()),
+            )
+            .unwrap(),
+            (Provider::M365Copilot, url.to_string())
+        );
+    }
+
+    #[test]
+    fn m365_capabilities_are_windows_only_experimental() {
+        assert_eq!(
+            Provider::M365Copilot.capabilities_for_platform(true),
+            ProviderCapabilities {
+                session: SessionSupport::UrlOnly,
+                images: true,
+                files: true,
+                model_selection: true,
+                reasoning: true,
+                image_download: true,
+            }
+        );
+        assert_eq!(
+            Provider::M365Copilot.capabilities_for_platform(false),
+            ProviderCapabilities {
+                session: SessionSupport::None,
+                images: false,
+                files: false,
+                model_selection: false,
+                reasoning: false,
+                image_download: false,
+            }
+        );
+    }
+
+    #[test]
+    fn non_windows_rejects_m365_v2_features_with_platform_error() {
+        for (flag, value) in [
+            (
+                "--session-url",
+                "https://m365.cloud.microsoft/chat/conversation/abc",
+            ),
+            ("--image", "token.png"),
+            ("--file", "token.txt"),
+            ("--model", "GPT 5.5"),
+            ("--reasoning", "quick"),
+            ("--image-output", "images"),
+        ] {
+            let cli =
+                Cli::try_parse_from(["ask-bridge", "--provider", "m365", flag, value, "read"])
+                    .unwrap();
+            let error =
+                validate_provider_feature_support_for_platform(Provider::M365Copilot, &cli, false)
+                    .unwrap_err();
+            assert!(error.contains(flag));
+            assert!(error.contains("Windows-only experimental"));
+        }
+    }
+
+    #[test]
+    fn validates_m365_conversation_url_ownership_fail_closed() {
+        for valid in [
+            "https://m365.cloud.microsoft/chat/conversation/abc",
+            "https://www.m365.cloud.microsoft/chat/conversation/abc-123_DEF",
+        ] {
+            assert!(Provider::M365Copilot.owns_conversation_url(&Url::parse(valid).unwrap()));
+        }
+        for invalid in [
+            "http://m365.cloud.microsoft/chat/conversation/abc",
+            "https://m365copilot.com/chat/conversation/abc",
+            "https://m365.cloud.microsoft/chat",
+            "https://m365.cloud.microsoft/chat/conversation/",
+            "https://m365.cloud.microsoft/chat/conversation/abc/extra",
+            "https://m365.cloud.microsoft/chat/conversation/abc?tenant=secret",
+            "https://m365.cloud.microsoft/chat/conversation/abc#fragment",
+            "https://m365.cloud.microsoft/chat/conversation/%2Fadmin",
+            "https://m365.cloud.microsoft.evil.test/chat/conversation/abc",
+        ] {
+            assert!(
+                !Provider::M365Copilot.owns_conversation_url(&Url::parse(invalid).unwrap()),
+                "expected {invalid} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn infers_m365_session_url_provider_and_reports_explicit_conflicts() {
+        let url =
+            Url::parse("https://m365.cloud.microsoft/chat/conversation/conversation-123").unwrap();
+        assert_eq!(
+            resolve_session_url_provider(Provider::ChatGpt, false, &url).unwrap(),
+            Provider::M365Copilot
+        );
+
+        let error = resolve_session_url_provider(Provider::ChatGpt, true, &url).unwrap_err();
+        assert!(error.contains("Microsoft 365 Copilot"));
+        assert!(error.contains("--provider selected ChatGPT"));
+    }
+
+    #[test]
+    fn session_support_levels_distinguish_urls_and_raw_ids() {
+        assert!(!SessionSupport::None.supports_url());
+        assert!(!SessionSupport::None.supports_id());
+        assert!(SessionSupport::UrlOnly.supports_url());
+        assert!(!SessionSupport::UrlOnly.supports_id());
+        assert!(SessionSupport::UrlAndId.supports_url());
+        assert!(SessionSupport::UrlAndId.supports_id());
     }
 
     #[test]
@@ -2947,6 +3678,82 @@ mod tests {
     }
 
     #[test]
+    fn preserves_existing_provider_capabilities() {
+        assert_eq!(
+            Provider::ChatGpt.capabilities(),
+            ProviderCapabilities {
+                session: SessionSupport::UrlAndId,
+                images: true,
+                files: true,
+                model_selection: true,
+                reasoning: true,
+                image_download: true,
+            }
+        );
+        assert_eq!(
+            Provider::Gemini.capabilities(),
+            ProviderCapabilities {
+                session: SessionSupport::UrlAndId,
+                images: false,
+                files: true,
+                model_selection: true,
+                reasoning: true,
+                image_download: true,
+            }
+        );
+        assert_eq!(
+            Provider::Claude.capabilities(),
+            ProviderCapabilities {
+                session: SessionSupport::UrlAndId,
+                images: true,
+                files: true,
+                model_selection: true,
+                reasoning: false,
+                image_download: true,
+            }
+        );
+        assert_eq!(
+            Provider::M365Copilot.capabilities(),
+            Provider::M365Copilot.capabilities_for_platform(cfg!(target_os = "windows"))
+        );
+    }
+
+    #[test]
+    fn windows_allows_m365_v2_features_but_rejects_raw_session_ids() {
+        for (flag, value) in [
+            (
+                "--session-url",
+                "https://m365.cloud.microsoft/chat/conversation/abc",
+            ),
+            ("--image", "token.png"),
+            ("--file", "token.txt"),
+            ("--model", "GPT 5.5"),
+            ("--reasoning", "quick"),
+            ("--image-output", "images"),
+        ] {
+            let cli =
+                Cli::try_parse_from(["ask-bridge", "--provider", "m365", flag, value, "read"])
+                    .unwrap();
+            validate_provider_feature_support_for_platform(Provider::M365Copilot, &cli, true)
+                .unwrap();
+        }
+
+        let cli = Cli::try_parse_from([
+            "ask-bridge",
+            "--provider",
+            "m365",
+            "--session-id",
+            "conversation-123",
+            "read",
+        ])
+        .unwrap();
+        let error =
+            validate_provider_feature_support_for_platform(Provider::M365Copilot, &cli, true)
+                .unwrap_err();
+        assert!(error.contains("--session-id"));
+    }
+
+    #[test]
     fn parses_reasoning_cli_argument() {
         let cli = Cli::try_parse_from([
             "ask-bridge",
@@ -3042,6 +3849,85 @@ mod tests {
     }
 
     #[test]
+    fn resolves_observed_m365_models_and_reasoning_aliases() {
+        for (value, expected) in [
+            ("GPT 5.6", "GPT 5.6"),
+            ("gpt-5.5", "GPT 5.5"),
+            ("Claude Sonnet", "Sonnet"),
+            ("opus", "Opus"),
+        ] {
+            let plan = resolve_selection_plan(Provider::M365Copilot, Some(value), None).unwrap();
+            assert_eq!(plan.model.as_deref(), Some(expected));
+            assert_eq!(plan.reasoning, None);
+        }
+
+        for (value, expected) in [
+            ("auto", ReasoningRequest::M365Auto),
+            ("自動", ReasoningRequest::M365Auto),
+            ("quick", ReasoningRequest::M365Quick),
+            ("quick-response", ReasoningRequest::M365Quick),
+            ("快速回應", ReasoningRequest::M365Quick),
+            ("deep", ReasoningRequest::M365ThinkDeeper),
+            ("think-deeper", ReasoningRequest::M365ThinkDeeper),
+            ("深度思考", ReasoningRequest::M365ThinkDeeper),
+        ] {
+            let plan = resolve_selection_plan(Provider::M365Copilot, None, Some(value)).unwrap();
+            assert_eq!(plan.model, None);
+            assert_eq!(plan.reasoning, Some(expected));
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_or_conflicting_m365_selection_values() {
+        let empty = resolve_selection_plan(Provider::M365Copilot, Some("  "), None).unwrap_err();
+        assert!(empty.contains("Empty model"));
+
+        let model =
+            resolve_selection_plan(Provider::M365Copilot, Some("future-model"), None).unwrap_err();
+        assert!(model.contains("GPT 5.6, GPT 5.5, Sonnet, Opus"));
+
+        let reasoning =
+            resolve_selection_plan(Provider::M365Copilot, None, Some("maximum")).unwrap_err();
+        assert!(reasoning.contains("auto, quick, think-deeper"));
+
+        let conflict =
+            resolve_selection_plan(Provider::M365Copilot, Some("GPT 5.6"), Some("think-deeper"))
+                .unwrap_err();
+        assert!(conflict.contains("share one UI control"));
+    }
+
+    #[test]
+    fn classifies_m365_selection_locked_timeout_and_authentication_errors() {
+        let locked = interpret_selection_status(
+            SelectionKind::Model,
+            "error: Opus is locked or unavailable",
+        )
+        .unwrap_err();
+        assert!(locked.contains("model selection"));
+        assert!(locked.contains("locked or unavailable"));
+
+        let timeout = interpret_selection_status(SelectionKind::Model, "pending").unwrap_err();
+        assert!(timeout.contains("timed out"));
+
+        let authentication = interpret_selection_status(
+            SelectionKind::Reasoning,
+            "error: authentication: Microsoft sign-in expired during selection",
+        )
+        .unwrap_err();
+        assert!(authentication.contains("reasoning selection"));
+        assert!(authentication.contains("authentication"));
+    }
+
+    #[test]
+    fn converts_legacy_m365_reasoning_like_model_values() {
+        let plan =
+            resolve_selection_plan(Provider::M365Copilot, Some("Quick response"), None).unwrap();
+        assert_eq!(plan.model, None);
+        assert_eq!(plan.reasoning, Some(ReasoningRequest::M365Quick));
+        assert!(plan.used_legacy_model);
+    }
+
+    #[test]
     fn preserves_claude_model_selector_script() {
         let target = serde_json::to_string("Sonnet").unwrap();
         let script = claude_model_switch_script(&target);
@@ -3054,10 +3940,205 @@ mod tests {
 
     #[test]
     fn preserves_provider_baselines_without_reasoning() {
-        for provider in [Provider::ChatGpt, Provider::Gemini, Provider::Claude] {
+        for provider in [
+            Provider::ChatGpt,
+            Provider::Gemini,
+            Provider::Claude,
+            Provider::M365Copilot,
+        ] {
             let plan = resolve_selection_plan(provider, None, None).unwrap();
             assert_eq!(plan, SelectionPlan::default());
         }
+    }
+
+    #[test]
+    fn validates_m365_attachment_allowlists_and_signatures() {
+        let root = make_test_dir("m365_attachments");
+        std::fs::create_dir_all(&root).unwrap();
+        let png = root.join("sample.png");
+        let jpeg = root.join("sample.jpeg");
+        let pdf = root.join("sample.pdf");
+        let docx = root.join("sample.docx");
+        let text = root.join("sample.txt");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\npayload").unwrap();
+        std::fs::write(&jpeg, [0xff, 0xd8, 0xff, 0xe0]).unwrap();
+        std::fs::write(&pdf, b"%PDF-1.7\n").unwrap();
+        std::fs::write(&docx, b"PK\x03\x04").unwrap();
+        std::fs::write(&text, b"safe fixture").unwrap();
+
+        for path in [&png, &jpeg] {
+            validate_attachment_path(
+                Provider::M365Copilot,
+                AttachmentKind::Image,
+                path.to_str().unwrap(),
+            )
+            .unwrap();
+        }
+        for path in [&pdf, &docx, &text] {
+            validate_attachment_path(
+                Provider::M365Copilot,
+                AttachmentKind::File,
+                path.to_str().unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_m365_attachment_paths_and_content() {
+        let root = make_test_dir("m365_invalid_attachments");
+        std::fs::create_dir_all(&root).unwrap();
+        let unsupported = root.join("sample.csv");
+        let empty_image = root.join("empty.png");
+        let corrupt_image = root.join("corrupt.jpg");
+        let missing = root.join("missing.pdf");
+        std::fs::write(&unsupported, b"a,b").unwrap();
+        std::fs::write(&empty_image, b"").unwrap();
+        std::fs::write(&corrupt_image, b"not-a-jpeg").unwrap();
+
+        for (kind, path) in [
+            (AttachmentKind::File, unsupported.as_path()),
+            (AttachmentKind::Image, empty_image.as_path()),
+            (AttachmentKind::Image, corrupt_image.as_path()),
+            (AttachmentKind::File, root.as_path()),
+            (AttachmentKind::File, missing.as_path()),
+        ] {
+            assert!(
+                validate_attachment_path(Provider::M365Copilot, kind, path.to_str().unwrap())
+                    .is_err()
+            );
+        }
+        assert!(validate_attachment_path(Provider::M365Copilot, AttachmentKind::File, "").is_err());
+    }
+
+    #[test]
+    fn matches_accept_rules_by_mime_wildcard_and_extension() {
+        assert!(accept_rule_matches(
+            "application/pdf",
+            "brief.pdf",
+            "application/pdf"
+        ));
+        assert!(accept_rule_matches("image/*", "image.png", "image/png"));
+        assert!(accept_rule_matches(
+            ".docx,.txt",
+            "REPORT.DOCX",
+            "application/octet-stream"
+        ));
+        assert!(!accept_rule_matches(".pdf", "brief.txt", "text/plain"));
+    }
+
+    #[test]
+    fn classifies_m365_attachment_and_policy_errors() {
+        assert_eq!(
+            classify_m365_error_message("authentication: Microsoft sign-in expired"),
+            M365ErrorClass::Authentication
+        );
+        assert_eq!(
+            classify_m365_error_message("Your organization DLP policy blocked this file"),
+            M365ErrorClass::Policy
+        );
+        assert_eq!(
+            classify_m365_error_message("upload control not found; this may be a UI rollout"),
+            M365ErrorClass::Selector
+        );
+        assert_eq!(
+            classify_m365_error_message("attachment upload timed out"),
+            M365ErrorClass::Timeout
+        );
+        assert_eq!(
+            classify_m365_error_message("unsupported attachment rejected"),
+            M365ErrorClass::Rejected
+        );
+    }
+
+    #[test]
+    fn derives_image_extensions_from_bytes_and_avoids_overwrite() {
+        assert_eq!(
+            image_extension_from_bytes(b"\x89PNG\r\n\x1a\n", Some("image/jpeg")).unwrap(),
+            "png"
+        );
+        assert_eq!(
+            image_extension_from_bytes(&[0xff, 0xd8, 0xff], None).unwrap(),
+            "jpg"
+        );
+        assert!(image_extension_from_bytes(b"not-image", Some("image/png")).is_err());
+
+        let root = make_test_dir("m365_image_output");
+        std::fs::create_dir_all(&root).unwrap();
+        let requested = root.join("result.jpg");
+        std::fs::write(root.join("result.png"), b"existing").unwrap();
+        let output = explicit_image_output_path(requested.to_str().unwrap(), 1, 0, "png").unwrap();
+        assert_eq!(
+            output.file_name().and_then(|value| value.to_str()),
+            Some("result_2.png")
+        );
+
+        let multi = explicit_image_output_path(requested.to_str().unwrap(), 2, 1, "webp").unwrap();
+        assert_eq!(
+            multi.file_name().and_then(|value| value.to_str()),
+            Some("result_2.webp")
+        );
+    }
+
+    #[test]
+    fn m365_image_download_without_explicit_output_is_a_noop() {
+        download_m365_images_from_latest_message("unused", None, false).unwrap();
+    }
+
+    #[test]
+    fn interprets_m365_image_download_empty_partial_and_auth_results() {
+        let no_images = serde_json::json!({
+            "status": "success",
+            "images": [],
+            "failures": []
+        });
+        assert!(
+            interpret_m365_image_download_result(&no_images)
+                .unwrap_err()
+                .contains("no generated image")
+        );
+
+        let all_failed = serde_json::json!({
+            "status": "success",
+            "images": [],
+            "failures": [
+                { "reason": "HTTP 403 from https://example.test/private.png" },
+                { "reason": "unexpected content type text/html" }
+            ]
+        });
+        let all_failed_error = interpret_m365_image_download_result(&all_failed).unwrap_err();
+        assert!(all_failed_error.contains("all 2"));
+        assert!(!all_failed_error.contains("example.test"));
+        assert!(all_failed_error.contains("<url>"));
+
+        let partial = serde_json::json!({
+            "status": "success",
+            "images": [{ "dataUrl": "data:image/png;base64,AA==" }],
+            "failures": [{ "reason": "blob URL expired" }]
+        });
+        let (images, failures) = interpret_m365_image_download_result(&partial).unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(failures, vec!["blob URL expired"]);
+
+        let authentication = serde_json::json!({
+            "status": "error",
+            "error": "authentication: Microsoft sign-in expired during image download"
+        });
+        assert!(
+            interpret_m365_image_download_result(&authentication)
+                .unwrap_err()
+                .starts_with("authentication:")
+        );
+
+        let policy = serde_json::json!({
+            "status": "error",
+            "error": "organization policy blocked image download"
+        });
+        assert!(
+            interpret_m365_image_download_result(&policy)
+                .unwrap_err()
+                .starts_with("policy:")
+        );
     }
 
     #[test]
@@ -3289,6 +4370,160 @@ mod tests {
         };
 
         assert_eq!(signals.state(Provider::Claude), LoginState::Unknown);
+    }
+
+    #[test]
+    fn m365_composer_without_account_remains_unknown() {
+        let signals = LoginSignals {
+            account: false,
+            auth_control: false,
+            auth_path: false,
+            composer: true,
+            stable: true,
+        };
+
+        assert_eq!(signals.state(Provider::M365Copilot), LoginState::Unknown);
+    }
+
+    #[test]
+    fn m365_account_and_auth_signals_are_fail_closed() {
+        let logged_in = LoginSignals {
+            account: true,
+            auth_control: false,
+            auth_path: false,
+            composer: true,
+            stable: true,
+        };
+        let logged_out = LoginSignals {
+            account: false,
+            auth_control: true,
+            auth_path: true,
+            composer: false,
+            stable: true,
+        };
+        let unstable = LoginSignals {
+            account: false,
+            auth_control: true,
+            auth_path: false,
+            composer: true,
+            stable: false,
+        };
+
+        assert_eq!(logged_in.state(Provider::M365Copilot), LoginState::LoggedIn);
+        assert_eq!(
+            logged_out.state(Provider::M365Copilot),
+            LoginState::LoggedOut
+        );
+        assert_eq!(unstable.state(Provider::M365Copilot), LoginState::Unknown);
+    }
+
+    #[test]
+    fn m365_login_scripts_include_observed_signals() {
+        let ready = Provider::M365Copilot.ready_check_js();
+        let login = Provider::M365Copilot.login_signals_js();
+
+        for signal in [
+            "login.microsoftonline.com",
+            "login.live.com",
+            "m365-chat-editor-target-element",
+            "user-account-avatar",
+            "loginfmt",
+            "idSIButton9",
+        ] {
+            assert!(
+                ready.contains(signal) || login.contains(signal),
+                "missing M365 login signal {signal}"
+            );
+        }
+        assert!(login.starts_with("async () =>"));
+        assert!(login.contains("stableSince"));
+        assert!(login.contains("return { ...signals, stable }"));
+    }
+
+    #[test]
+    fn m365_selector_baseline_is_non_empty() {
+        let provider = Provider::M365Copilot;
+        for selector in [
+            provider.assistant_selector(),
+            provider.latest_response_selector(),
+            provider.response_content_selector(),
+            provider.composer_selectors_json(),
+            provider.send_button_selectors_json(),
+            provider.stop_button_selectors_json(),
+        ] {
+            assert!(!selector.trim().is_empty());
+        }
+        assert!(
+            provider
+                .assistant_selector()
+                .contains("copilot-message-div")
+        );
+        assert!(
+            provider
+                .response_content_selector()
+                .contains("markdown-reply")
+        );
+    }
+
+    #[test]
+    fn m365_completion_requires_stable_non_empty_text() {
+        let mut tracker = ResponseCompletionTracker::default();
+
+        assert!(!tracker.observe("generating", true, 10, 1, true));
+        assert!(!tracker.observe("done", true, 0, 0, true));
+        assert!(!tracker.observe("done", true, 10, 1, true));
+        assert!(!tracker.observe("done", true, 12, 2, true));
+        assert!(!tracker.observe("done", true, 12, 2, true));
+        assert!(tracker.observe("done", true, 12, 2, true));
+    }
+
+    #[test]
+    fn existing_provider_completion_keeps_three_done_polls() {
+        let mut tracker = ResponseCompletionTracker::default();
+
+        assert!(!tracker.observe("done", true, 0, 0, false));
+        assert!(!tracker.observe("done", true, 0, 0, false));
+        assert!(tracker.observe("done", true, 0, 0, false));
+        assert!(!tracker.observe("waiting", true, 0, 0, false));
+    }
+
+    #[test]
+    fn response_validation_rejects_empty_or_whitespace_content() {
+        for content in ["", "   ", "\r\n\t"] {
+            let error = validate_non_empty_response(Provider::M365Copilot, content.to_string())
+                .unwrap_err();
+            assert!(error.contains("empty response"));
+        }
+
+        assert_eq!(
+            validate_non_empty_response(Provider::M365Copilot, "ok".to_string()).unwrap(),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn only_m365_explicit_image_output_can_continue_after_empty_markdown() {
+        let error = "Microsoft 365 Copilot DOM scraper returned an empty response";
+        assert!(allows_empty_markdown_for_explicit_image_output(
+            Provider::M365Copilot,
+            Some("images"),
+            error
+        ));
+        assert!(!allows_empty_markdown_for_explicit_image_output(
+            Provider::M365Copilot,
+            None,
+            error
+        ));
+        assert!(!allows_empty_markdown_for_explicit_image_output(
+            Provider::ChatGpt,
+            Some("images"),
+            error
+        ));
+        assert!(!allows_empty_markdown_for_explicit_image_output(
+            Provider::M365Copilot,
+            Some("images"),
+            "authentication failed"
+        ));
     }
 
     #[test]
@@ -3888,11 +5123,114 @@ fn open_url_tab(
     wait_for_page_load(config_path, page_provider, verbose)
 }
 
+fn verify_resumed_session(
+    config_path: &str,
+    provider: Provider,
+    requested_url: &str,
+) -> Result<(), String> {
+    if provider != Provider::M365Copilot {
+        return Ok(());
+    }
+
+    let requested = Url::parse(requested_url)
+        .map_err(|error| format!("session: invalid requested conversation URL: {error}"))?;
+    let result = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({
+            "function": r#"() => ({
+                href: window.location.href,
+                authRedirect: /^(?:login\.microsoftonline\.com|login\.live\.com)$/i.test(window.location.hostname),
+                composer: Boolean(document.querySelector('#m365-chat-editor-target-element')),
+                conversationMessage: Boolean(document.querySelector(
+                    '[data-testid="copilot-message-div"], [data-testid="m365-chat-llm-web-ui-chat-message"]'
+                ))
+            })"#
+        }),
+    )?;
+    let parsed = parse_script_result(&result)?;
+    if parsed
+        .get("authRedirect")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(
+            "authentication: Microsoft sign-in interrupted session resume; rerun `ask-bridge --provider m365 login` headfully"
+                .to_string(),
+        );
+    }
+
+    let current = parsed
+        .get("href")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Url::parse(value).ok())
+        .ok_or_else(|| "session: could not read the current conversation URL".to_string())?;
+    let same_conversation = Provider::M365Copilot.owns_conversation_url(&current)
+        && requested.host_str().map(str::to_ascii_lowercase)
+            == current.host_str().map(str::to_ascii_lowercase)
+        && requested.path() == current.path();
+    let composer = parsed
+        .get("composer")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let conversation_message = parsed
+        .get("conversationMessage")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if !same_conversation || !composer || !conversation_message {
+        return Err(
+            "session: the requested Microsoft 365 conversation was not restored; the page returned to chat home, was unavailable, or lacked a conversation identity signal"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
 fn copy_latest_markdown(config_path: &str, provider: Provider) -> Result<String, String> {
-    match copy_latest_markdown_via_clipboard(config_path, provider) {
+    let content = match copy_latest_markdown_via_clipboard(config_path, provider) {
         Ok(content) => Ok(content),
         Err(_) => scrape_latest_markdown_from_dom(config_path, provider),
+    }?;
+
+    validate_non_empty_response(provider, content)
+}
+
+fn allows_empty_markdown_for_explicit_image_output(
+    provider: Provider,
+    image_output: Option<&str>,
+    error: &str,
+) -> bool {
+    provider == Provider::M365Copilot
+        && image_output.is_some()
+        && error.to_ascii_lowercase().contains("empty response")
+}
+
+fn copy_latest_markdown_for_request(
+    config_path: &str,
+    provider: Provider,
+    image_output: Option<&str>,
+) -> Result<String, String> {
+    match copy_latest_markdown(config_path, provider) {
+        Ok(markdown) => Ok(markdown),
+        Err(error)
+            if allows_empty_markdown_for_explicit_image_output(provider, image_output, &error) =>
+        {
+            Ok(String::new())
+        }
+        Err(error) => Err(error),
     }
+}
+
+fn validate_non_empty_response(provider: Provider, content: String) -> Result<String, String> {
+    if content.trim().is_empty() {
+        return Err(format!(
+            "{} returned an empty response",
+            provider.display_name()
+        ));
+    }
+
+    Ok(content)
 }
 
 fn copy_latest_markdown_via_clipboard(
@@ -3991,7 +5329,31 @@ fn scrape_latest_markdown_from_dom(
                 const classText = Array.from(node.classList || []).join(' ');
                 if (node.classList.contains('sr-only') ||
                     /screen-reader|visually-hidden|cdk-visually-hidden/.test(classText) ||
-                    tag === 'button' || tag === 'style' || tag === 'script') {
+                    node.getAttribute('aria-hidden') === 'true' ||
+                    tag === 'style' || tag === 'script') {
+                    return;
+                }
+
+                // M365 citations are buttons with structured source URLs rather than anchors.
+                if (tag === 'button' && node.hasAttribute('data-grouped-citations')) {
+                    try {
+                        const citations = JSON.parse(node.getAttribute('data-grouped-citations') || '[]');
+                        const unique = new Set();
+                        for (const citation of citations) {
+                            const href = citation && citation.url ? String(citation.url) : '';
+                            const label = citation && citation.name ? String(citation.name) : href;
+                            if (!href || unique.has(href)) continue;
+                            unique.add(href);
+                            markdown += ' [' + label + '](' + href + ')';
+                        }
+                    } catch (_) {
+                        const label = node.getAttribute('aria-label') || 'Citation';
+                        markdown += ' [' + label + ']';
+                    }
+                    return;
+                }
+
+                if (tag === 'button') {
                     return;
                 }
 
@@ -4002,6 +5364,33 @@ fn scrape_latest_markdown_from_dom(
                     const lang = langClass ? langClass.replace('language-', '') : '';
                     const codeText = codeEl ? codeEl.textContent : node.textContent;
                     markdown += '\n```' + lang + '\n' + codeText + '\n```\n';
+                    return;
+                }
+
+                if (node.classList.contains('scriptor-component-code-block')) {
+                    const editor = node.querySelector('[role="textbox"][aria-label="Code editor"]');
+                    const language = Array.from(node.children)
+                        .map((child) => (child.innerText || child.textContent || '').trim())
+                        .find((text) => /^[A-Za-z0-9+#._-]{1,20}$/.test(text)) || '';
+                    const codeText = editor?.lastElementChild?.innerText ||
+                        editor?.lastElementChild?.textContent ||
+                        editor?.innerText ||
+                        editor?.textContent ||
+                        '';
+                    markdown += '\n```' + language.toLowerCase() + '\n' + codeText + '\n```\n';
+                    return;
+                }
+
+                // M365 renders fenced code in a read-only textbox instead of pre/code.
+                if (node.getAttribute('role') === 'textbox' &&
+                    /code editor/i.test(node.getAttribute('aria-label') || '') &&
+                    !node.isContentEditable) {
+                    const codeText = node.lastElementChild?.innerText ||
+                        node.lastElementChild?.textContent ||
+                        node.innerText ||
+                        node.textContent ||
+                        '';
+                    markdown += '\n```\n' + codeText + '\n```\n';
                     return;
                 }
 
@@ -4037,6 +5426,11 @@ fn scrape_latest_markdown_from_dom(
                         markdown += '[' + text + '](' + href + ')';
                         return;
                     }
+                }
+
+                const testId = node.getAttribute('data-testid') || '';
+                if (/source-card|sources-button|chat-suggestion/i.test(testId)) {
+                    return;
                 }
 
                 // Paragraphs, headers, list items
@@ -4100,8 +5494,334 @@ fn scrape_latest_markdown_from_dom(
             provider.display_name()
         ));
     }
+    if content.trim().is_empty() {
+        return Err(format!(
+            "{} DOM scraper returned an empty response",
+            provider.display_name()
+        ));
+    }
 
     Ok(content)
+}
+
+fn image_extension_from_bytes(
+    bytes: &[u8],
+    declared_type: Option<&str>,
+) -> Result<&'static str, String> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Ok("png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Ok("jpg");
+    }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        return Ok("webp");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Ok("gif");
+    }
+    Err(format!(
+        "image download: unsupported or invalid image content{}",
+        declared_type
+            .filter(|value| !value.is_empty())
+            .map(|value| format!(" ({value})"))
+            .unwrap_or_default()
+    ))
+}
+
+fn unique_output_path(path: PathBuf) -> PathBuf {
+    if !path.exists() {
+        return path;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("generated");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for suffix in 2.. {
+        let name = match extension {
+            Some(extension) => format!("{stem}_{suffix}.{extension}"),
+            None => format!("{stem}_{suffix}"),
+        };
+        let candidate = parent.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("an unused image output path should always be found")
+}
+
+fn explicit_image_output_path(
+    output: &str,
+    total: usize,
+    index: usize,
+    extension: &str,
+) -> Result<PathBuf, String> {
+    let path = Path::new(output);
+    let is_directory = path.is_dir()
+        || output.ends_with('/')
+        || output.ends_with('\\')
+        || path.extension().is_none();
+    let target = if is_directory {
+        std::fs::create_dir_all(path).map_err(|error| {
+            format!("image download: failed to create output directory: {error}")
+        })?;
+        path.join(format!("generated_{}.{}", index + 1, extension))
+    } else {
+        let parent = path.parent().unwrap_or_else(|| Path::new(""));
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                format!("image download: failed to create output directory: {error}")
+            })?;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "image download: invalid output file name".to_string())?;
+        let name = if total == 1 {
+            format!("{stem}.{extension}")
+        } else {
+            format!("{stem}_{}.{}", index + 1, extension)
+        };
+        parent.join(name)
+    };
+    Ok(unique_output_path(target))
+}
+
+fn sanitize_m365_error_detail(detail: &str) -> String {
+    detail
+        .split_whitespace()
+        .map(|token| {
+            if token.starts_with("http://") || token.starts_with("https://") {
+                "<url>"
+            } else {
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(240)
+        .collect()
+}
+
+fn interpret_m365_image_download_result(
+    result: &Value,
+) -> Result<(Vec<Value>, Vec<String>), String> {
+    let status = result
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("error");
+    if status == "error" {
+        let detail = sanitize_m365_error_detail(
+            result
+                .get("error")
+                .and_then(|value| value.as_str())
+                .unwrap_or("browser image scan failed"),
+        );
+        let prefix = match classify_m365_error_message(&detail) {
+            M365ErrorClass::Authentication => "authentication",
+            M365ErrorClass::Policy => "policy",
+            _ => "image download",
+        };
+        return Err(format!("{prefix}: {detail}"));
+    }
+    if status != "success" {
+        return Err(format!(
+            "image download: unexpected browser status '{status}'"
+        ));
+    }
+
+    let images = result
+        .get("images")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let failures: Vec<String> = result
+        .get("failures")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .map(|failure| {
+            sanitize_m365_error_detail(
+                failure
+                    .get("reason")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown browser-side failure"),
+            )
+        })
+        .collect();
+
+    if images.is_empty() {
+        return Err(if failures.is_empty() {
+            "image download: no generated image was found in the latest Microsoft 365 assistant turn"
+                .to_string()
+        } else {
+            format!(
+                "image download: all {} generated image candidate(s) failed: {}",
+                failures.len(),
+                failures.join("; ")
+            )
+        });
+    }
+    Ok((images, failures))
+}
+
+fn download_m365_images_from_latest_message(
+    config_path: &str,
+    image_output: Option<&str>,
+    verbose: bool,
+) -> Result<(), String> {
+    let Some(image_output) = image_output else {
+        return Ok(());
+    };
+    if verbose {
+        println!("image download: scanning the latest Microsoft 365 assistant turn...");
+    }
+
+    let latest_selector = serde_json::to_string(Provider::M365Copilot.latest_response_selector())
+        .map_err(|error| {
+        format!("image download: failed to serialize response selector: {error}")
+    })?;
+    let helper = include_str!("m365-automation.cjs");
+    let script = format!(
+        r#"() => {{
+            {helper}
+            window.__ask_bridge_m365_image_download = {{ status: 'pending' }};
+            (async () => {{
+                const failures = [];
+                try {{
+                    const authRedirected = () => /^(?:login\.microsoftonline\.com|login\.live\.com)$/i.test(
+                        window.location.hostname
+                    );
+                    if (authRedirected()) {{
+                        throw new Error('authentication: Microsoft sign-in is required during image download');
+                    }}
+                    const turns = document.querySelectorAll({latest_selector});
+                    const latestTurn = turns[turns.length - 1];
+                    const candidates = globalThis.AskBridgeM365Automation.generatedImagesFromLatestTurn(latestTurn);
+                    const images = [];
+                    for (let index = 0; index < candidates.length; index += 1) {{
+                        const candidate = candidates[index];
+                        try {{
+                            if (authRedirected()) {{
+                                throw new Error('authentication: Microsoft sign-in expired during image download');
+                            }}
+                            let dataUrl = candidate.src;
+                            let contentType = '';
+                            if (!candidate.src.startsWith('data:image/')) {{
+                                const response = await fetch(candidate.src, {{
+                                    credentials: 'include',
+                                    redirect: 'follow',
+                                }});
+                                if (authRedirected()) {{
+                                    throw new Error('authentication: Microsoft sign-in expired during image download');
+                                }}
+                                if (!response.ok) throw new Error('HTTP ' + response.status);
+                                contentType = response.headers.get('content-type') || '';
+                                if (!contentType.toLowerCase().startsWith('image/')) {{
+                                    throw new Error('unexpected content type ' + (contentType || '(missing)'));
+                                }}
+                                const blob = await response.blob();
+                                dataUrl = await new Promise((resolve, reject) => {{
+                                    const reader = new FileReader();
+                                    reader.onloadend = () => resolve(reader.result);
+                                    reader.onerror = () => reject(new Error('failed to read image bytes'));
+                                    reader.readAsDataURL(blob);
+                                }});
+                            }}
+                            if (!String(dataUrl || '').startsWith('data:image/')) {{
+                                throw new Error('image source did not produce image bytes');
+                            }}
+                            images.push({{ index, dataUrl, contentType }});
+                        }} catch (error) {{
+                            failures.push({{ index, reason: error.message || String(error) }});
+                        }}
+                    }}
+                    window.__ask_bridge_m365_image_download = {{
+                        status: 'success',
+                        images,
+                        failures,
+                    }};
+                }} catch (error) {{
+                    window.__ask_bridge_m365_image_download = {{
+                        status: 'error',
+                        error: error.message || String(error),
+                        images: [],
+                        failures,
+                    }};
+                }}
+            }})();
+            return true;
+        }}"#
+    );
+    let started = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({ "function": script }),
+    )?;
+    if !parse_script_result(&started)?.as_bool().unwrap_or(false) {
+        return Err("image download: failed to start browser image scan".to_string());
+    }
+
+    let mut result = None;
+    for _ in 0..150 {
+        thread::sleep(Duration::from_millis(100));
+        let status = call_mcp_tool(
+            config_path,
+            "evaluate_script",
+            serde_json::json!({
+                "function": "() => window.__ask_bridge_m365_image_download || { status: 'pending' }"
+            }),
+        )?;
+        let parsed = parse_script_result(&status)?;
+        if parsed.get("status").and_then(|value| value.as_str()) != Some("pending") {
+            result = Some(parsed);
+            break;
+        }
+    }
+    let result = result
+        .ok_or_else(|| "image download: timed out before any files were written".to_string())?;
+    let (images, failures) = interpret_m365_image_download_result(&result)?;
+
+    let mut saved = Vec::new();
+    for (index, image) in images.iter().enumerate() {
+        let data_url = image
+            .get("dataUrl")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                "image download: browser returned an invalid image payload".to_string()
+            })?;
+        let (header, encoded) = data_url
+            .split_once(',')
+            .ok_or_else(|| "image download: browser returned a malformed data URL".to_string())?;
+        let bytes = general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| format!("image download: failed to decode image bytes: {error}"))?;
+        let extension = image_extension_from_bytes(
+            &bytes,
+            image
+                .get("contentType")
+                .and_then(|value| value.as_str())
+                .or(Some(header)),
+        )?;
+        let path = explicit_image_output_path(image_output, images.len(), index, extension)?;
+        std::fs::write(&path, bytes)
+            .map_err(|error| format!("image download: failed to write output file: {error}"))?;
+        println!("Downloaded generated image to: {}", path.to_string_lossy());
+        saved.push(path);
+    }
+
+    if !failures.is_empty() {
+        return Err(format!(
+            "image download: saved {} image(s), but {} candidate(s) failed: {}",
+            saved.len(),
+            failures.len(),
+            failures.join("; ")
+        ));
+    }
+    Ok(())
 }
 
 fn download_images_from_latest_message(
@@ -4110,6 +5830,9 @@ fn download_images_from_latest_message(
     image_output: Option<&str>,
     verbose: bool,
 ) -> Result<(), String> {
+    if provider == Provider::M365Copilot {
+        return download_m365_images_from_latest_message(config_path, image_output, verbose);
+    }
     if verbose {
         println!("Checking for generated images in the latest assistant response...");
     }
@@ -4415,6 +6138,380 @@ fn wait_for_attachment_indicator(
     ))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttachmentKind {
+    Image,
+    File,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum M365ErrorClass {
+    Authentication,
+    Policy,
+    Selector,
+    Timeout,
+    Rejected,
+    Unknown,
+}
+
+fn classify_m365_error_message(message: &str) -> M365ErrorClass {
+    let normalized = message.to_lowercase();
+    if normalized.contains("authentication")
+        || normalized.contains("sign-in")
+        || normalized.contains("sign in")
+        || normalized.contains("login.microsoftonline.com")
+    {
+        M365ErrorClass::Authentication
+    } else if normalized.contains("dlp")
+        || normalized.contains("policy")
+        || normalized.contains("organization")
+        || normalized.contains("blocked")
+        || normalized.contains("conditional access")
+    {
+        M365ErrorClass::Policy
+    } else if normalized.contains("selector")
+        || normalized.contains("control not found")
+        || normalized.contains("picker not found")
+        || normalized.contains("ui rollout")
+    {
+        M365ErrorClass::Selector
+    } else if normalized.contains("timeout") || normalized.contains("timed out") {
+        M365ErrorClass::Timeout
+    } else if normalized.contains("rejected")
+        || normalized.contains("unsupported")
+        || normalized.contains("failed")
+        || normalized.contains("error")
+    {
+        M365ErrorClass::Rejected
+    } else {
+        M365ErrorClass::Unknown
+    }
+}
+
+impl AttachmentKind {
+    fn stage_name(self) -> &'static str {
+        match self {
+            AttachmentKind::Image => "image upload",
+            AttachmentKind::File => "file upload",
+        }
+    }
+}
+
+fn attachment_basename(path: &str) -> &str {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("<attachment>")
+}
+
+fn m365_extension_allowed(kind: AttachmentKind, extension: &str) -> bool {
+    match kind {
+        AttachmentKind::Image => matches!(extension, "png" | "jpg" | "jpeg"),
+        AttachmentKind::File => matches!(extension, "pdf" | "docx" | "txt"),
+    }
+}
+
+fn validate_m365_file_signature(
+    kind: AttachmentKind,
+    extension: &str,
+    header: &[u8],
+) -> Result<(), String> {
+    let valid = match (kind, extension) {
+        (AttachmentKind::Image, "png") => header.starts_with(b"\x89PNG\r\n\x1a\n"),
+        (AttachmentKind::Image, "jpg" | "jpeg") => header.starts_with(&[0xff, 0xd8, 0xff]),
+        (AttachmentKind::File, "pdf") => header.starts_with(b"%PDF-"),
+        (AttachmentKind::File, "docx") => header.starts_with(b"PK"),
+        (AttachmentKind::File, "txt") => true,
+        _ => false,
+    };
+    valid.then_some(()).ok_or_else(|| {
+        format!(
+            "{}: attachment content does not match .{extension}",
+            kind.stage_name()
+        )
+    })
+}
+
+fn validate_attachment_path(
+    provider: Provider,
+    kind: AttachmentKind,
+    path: &str,
+) -> Result<(), String> {
+    let basename = attachment_basename(path);
+    if path.trim().is_empty() {
+        return Err(format!(
+            "{}: attachment path cannot be empty",
+            kind.stage_name()
+        ));
+    }
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        format!(
+            "{}: cannot access '{}': {error}",
+            kind.stage_name(),
+            basename
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{}: '{}' is not a regular file",
+            kind.stage_name(),
+            basename
+        ));
+    }
+
+    if provider != Provider::M365Copilot {
+        return Ok(());
+    }
+
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !m365_extension_allowed(kind, &extension) {
+        let formats = match kind {
+            AttachmentKind::Image => "PNG, JPEG",
+            AttachmentKind::File => "PDF, DOCX, TXT",
+        };
+        return Err(format!(
+            "{}: unsupported extension for '{}'. Microsoft 365 Copilot V2 supports {formats}.",
+            kind.stage_name(),
+            basename
+        ));
+    }
+    if kind == AttachmentKind::Image && metadata.len() == 0 {
+        return Err(format!("{}: '{}' is empty", kind.stage_name(), basename));
+    }
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("{}: cannot read '{}': {error}", kind.stage_name(), basename))?;
+    let mut header = [0u8; 8];
+    let bytes_read = file
+        .read(&mut header)
+        .map_err(|error| format!("{}: cannot read '{}': {error}", kind.stage_name(), basename))?;
+    validate_m365_file_signature(kind, &extension, &header[..bytes_read])
+        .map_err(|error| format!("{error} ('{basename}')"))
+}
+
+fn validate_attachment_inputs(
+    provider: Provider,
+    image_paths: &[String],
+    file_paths: &[String],
+) -> Result<(), String> {
+    for path in image_paths {
+        validate_attachment_path(provider, AttachmentKind::Image, path)?;
+    }
+    for path in file_paths {
+        validate_attachment_path(provider, AttachmentKind::File, path)?;
+    }
+    Ok(())
+}
+
+fn accept_rule_matches(accept: &str, file_name: &str, mime: &str) -> bool {
+    let file_name = file_name.to_ascii_lowercase();
+    let mime = mime.to_ascii_lowercase();
+    let top_level = mime.split('/').next().unwrap_or("");
+    let rules: Vec<String> = accept
+        .split(',')
+        .map(|rule| rule.trim().to_ascii_lowercase())
+        .filter(|rule| !rule.is_empty())
+        .collect();
+    rules.is_empty()
+        || rules.iter().any(|rule| {
+            rule == "*/*"
+                || rule == &mime
+                || (rule.starts_with('.') && file_name.ends_with(rule))
+                || (rule.ends_with("/*")
+                    && !top_level.is_empty()
+                    && rule == &format!("{top_level}/*"))
+        })
+}
+
+fn wait_for_m365_attachment(
+    config_path: &str,
+    path: &str,
+    kind: AttachmentKind,
+    verbose: bool,
+) -> Result<(), String> {
+    let file_name = attachment_basename(path);
+    let file_name_json = serde_json::to_string(file_name).map_err(|error| {
+        format!(
+            "{}: failed to serialize attachment name: {error}",
+            kind.stage_name()
+        )
+    })?;
+    let helper = include_str!("m365-automation.cjs");
+    let script = format!(
+        r#"() => {{
+            {helper}
+            return globalThis.AskBridgeM365Automation.inspectAttachment({file_name_json});
+        }}"#
+    );
+
+    for _ in 0..120 {
+        let result = call_mcp_tool(
+            config_path,
+            "evaluate_script",
+            serde_json::json!({ "function": script }),
+        )?;
+        let parsed = parse_script_result(&result)?;
+        match parsed
+            .get("status")
+            .and_then(|status| status.as_str())
+            .unwrap_or("not-found")
+        {
+            "done" => {
+                if verbose {
+                    println!(
+                        "{}: Microsoft 365 Copilot accepted '{}'",
+                        kind.stage_name(),
+                        file_name
+                    );
+                }
+                return Ok(());
+            }
+            "policy" => {
+                let detail = parsed
+                    .get("detail")
+                    .and_then(|detail| detail.as_str())
+                    .unwrap_or("organization policy blocked the attachment");
+                return Err(format!("policy: {detail}"));
+            }
+            "authentication" => {
+                return Err(
+                    "authentication: Microsoft sign-in expired during attachment upload; rerun `ask-bridge --provider m365 login` headfully"
+                        .to_string(),
+                );
+            }
+            "error" => {
+                let detail = parsed
+                    .get("detail")
+                    .and_then(|detail| detail.as_str())
+                    .unwrap_or("attachment rejected");
+                return Err(format!("{}: {detail}", kind.stage_name()));
+            }
+            _ => thread::sleep(Duration::from_millis(500)),
+        }
+    }
+
+    Err(format!(
+        "{}: upload timed out for '{}'; the prompt was not submitted",
+        kind.stage_name(),
+        file_name
+    ))
+}
+
+fn upload_m365_attachment(
+    config_path: &str,
+    path: &str,
+    kind: AttachmentKind,
+    verbose: bool,
+) -> Result<(), String> {
+    let canonical_path = std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "{}: cannot resolve '{}': {error}",
+            kind.stage_name(),
+            attachment_basename(path)
+        )
+    })?;
+    let canonical_path = canonical_path.to_string_lossy().to_string();
+    let open_menu_script = r#"async () => {
+        const isVisible = (element) => {
+            if (!element) return false;
+            if (typeof element.getClientRects !== 'function') return true;
+            return element.getClientRects().length > 0;
+        };
+        let button;
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            const scope = document.querySelector('#m365-chat-input-shared-container');
+            button = Array.from(
+                scope?.querySelectorAll('[data-testid="PlusMenuButton"]') || []
+            ).find(isVisible);
+            if (button) break;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        if (!button) {
+            return { ok: false, error: 'upload control not found; this may be a Microsoft 365 UI rollout' };
+        }
+        if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
+            return { ok: false, error: 'upload control is locked or unavailable' };
+        }
+        button.click();
+        const input = document.querySelector('input[type="file"]');
+        return { ok: true, accept: input?.getAttribute('accept') || '' };
+    }"#;
+    let open_result = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({ "function": open_menu_script }),
+    )?;
+    let open_parsed = parse_script_result(&open_result)?;
+    if !open_parsed
+        .get("ok")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "{}: {}",
+            kind.stage_name(),
+            open_parsed
+                .get("error")
+                .and_then(|value| value.as_str())
+                .unwrap_or("upload control not found; this may be a Microsoft 365 UI rollout")
+        ));
+    }
+
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = mime_type_for_extension(&extension);
+    let accept = open_parsed
+        .get("accept")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if !accept_rule_matches(accept, attachment_basename(path), mime) {
+        return Err(format!(
+            "{}: Microsoft 365 upload input does not accept '{}'",
+            kind.stage_name(),
+            attachment_basename(path)
+        ));
+    }
+
+    thread::sleep(Duration::from_millis(500));
+    let snapshot = take_snapshot_text(config_path)?;
+    let upload_uid = find_snapshot_uid(&snapshot, &["upload", "images", "files"], &["cloud"])
+        .or_else(|| find_snapshot_uid(&snapshot, &["上傳", "圖片", "檔案"], &["雲端"]))
+        .or_else(|| find_snapshot_uid(&snapshot, &["上傳", "影像", "檔案"], &["雲端"]))
+        .or_else(|| find_snapshot_uid(&snapshot, &["上传", "图片", "文件"], &["云端"]))
+        .ok_or_else(|| {
+            format!(
+                "{}: upload menu item not found; this may be a Microsoft 365 UI rollout",
+                kind.stage_name()
+            )
+        })?;
+
+    if verbose {
+        println!(
+            "{}: uploading '{}' to Microsoft 365 Copilot...",
+            kind.stage_name(),
+            attachment_basename(path)
+        );
+    }
+    call_mcp_tool(
+        config_path,
+        "upload_file",
+        serde_json::json!({
+            "uid": upload_uid,
+            "filePath": canonical_path,
+            "includeSnapshot": false
+        }),
+    )
+    .map_err(|error| format!("{}: upload_file failed: {error}", kind.stage_name()))?;
+    wait_for_m365_attachment(config_path, path, kind, verbose)
+}
+
 fn upload_attachments_via_file_chooser(
     config_path: &str,
     provider: Provider,
@@ -4422,6 +6519,16 @@ fn upload_attachments_via_file_chooser(
     file_paths: &[String],
     verbose: bool,
 ) -> Result<(), String> {
+    if provider == Provider::M365Copilot {
+        for path in image_paths {
+            upload_m365_attachment(config_path, path, AttachmentKind::Image, verbose)?;
+        }
+        for path in file_paths {
+            upload_m365_attachment(config_path, path, AttachmentKind::File, verbose)?;
+        }
+        return Ok(());
+    }
+
     for (path, verify_filename) in image_paths
         .iter()
         .map(|path| (path, false))
@@ -4440,6 +6547,7 @@ fn upload_attachments_via_file_chooser(
             Provider::ChatGpt => find_snapshot_uid(&snapshot, &["attach"], &["settings", "menu"]),
             Provider::Claude => find_snapshot_uid(&snapshot, &["attach"], &["settings", "menu"])
                 .or_else(|| find_snapshot_uid(&snapshot, &["upload"], &["drive"])),
+            Provider::M365Copilot => None,
         }
         .ok_or_else(|| {
             format!(
@@ -4467,13 +6575,14 @@ fn upload_attachments_via_file_chooser(
                 find_snapshot_uid(&snapshot, &["upload", "file"], &["drive", "connect"])
                     .or_else(|| find_snapshot_uid(&snapshot, &["file"], &["drive", "connect"]))
             }
+            Provider::M365Copilot => None,
         }
         .unwrap_or_else(|| menu_uid.clone());
 
         if verbose {
             println!(
                 "Uploading attachment '{}' to {}...",
-                file_path,
+                attachment_basename(path),
                 provider.display_name()
             );
         }
@@ -4591,6 +6700,16 @@ fn upload_attachments_to_provider(
         return Ok(());
     }
 
+    if provider == Provider::M365Copilot {
+        return upload_attachments_via_file_chooser(
+            config_path,
+            provider,
+            image_paths,
+            file_paths,
+            verbose,
+        );
+    }
+
     let data_transfer_image_paths: &[String] = if provider == Provider::Gemini
         && !image_paths.is_empty()
     {
@@ -4693,7 +6812,8 @@ fn upload_attachments_to_provider(
         + "                const parts = acc.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);\n"
         + "                const mime = (file.type || '').toLowerCase();\n"
         + "                const top = mime.split('/')[0];\n"
-        + "                return parts.some(p => p === '*/*' || p === mime || (p.endsWith('/*') && top && p === top + '/*'));\n"
+        + "                const name = (file.name || '').toLowerCase();\n"
+        + "                return parts.some(p => p === '*/*' || p === mime || (p.startsWith('.') && name.endsWith(p)) || (p.endsWith('/*') && top && p === top + '/*'));\n"
         + "            };\n"
         + "            const fileInput = fileInputs.find(i => fileObjects.every(f => accepts(i, f)))\n"
         + "                || fileInputs.find(i => !i.getAttribute('accept'))\n"
@@ -4812,6 +6932,35 @@ impl SelectionKind {
             SelectionKind::Reasoning => "reasoning",
         }
     }
+
+    fn stage_name(self) -> &'static str {
+        match self {
+            SelectionKind::Model => "model selection",
+            SelectionKind::Reasoning => "reasoning selection",
+        }
+    }
+}
+
+fn interpret_selection_status(kind: SelectionKind, status: &str) -> Result<&str, String> {
+    if status == "pending" {
+        return Err(format!(
+            "{}: timed out waiting for selected state verification",
+            kind.stage_name()
+        ));
+    }
+    if let Some(error) = status.strip_prefix("error:") {
+        return Err(format!("{}: {}", kind.stage_name(), error.trim()));
+    }
+    if let Some(selected) = status.strip_prefix("success:") {
+        let selected = selected.trim();
+        if !selected.is_empty() {
+            return Ok(selected);
+        }
+    }
+    Err(format!(
+        "{}: unexpected switch status: {status}",
+        kind.stage_name()
+    ))
 }
 
 fn switch_semantic_option(
@@ -4822,6 +6971,17 @@ fn switch_semantic_option(
     kind: SelectionKind,
     verbose: bool,
 ) -> Result<(), String> {
+    let capability_supported = match kind {
+        SelectionKind::Model => provider.capabilities().model_selection,
+        SelectionKind::Reasoning => provider.capabilities().reasoning,
+    };
+    if !capability_supported {
+        return Err(format!(
+            "{} does not support --{} in this ask-bridge version.",
+            provider.display_name(),
+            kind.display_name()
+        ));
+    }
     if provider == Provider::Claude {
         return Err("Semantic option selection is not supported for Claude".to_string());
     }
@@ -4837,6 +6997,7 @@ fn switch_semantic_option(
 
     let request = serde_json::json!({
         "provider": provider.to_string(),
+        "kind": kind.display_name(),
         "targetAliases": target_aliases,
         "verificationAliases": verification_aliases,
     });
@@ -4908,24 +7069,10 @@ fn switch_semantic_option(
         wait_cycles += 1;
     }
 
-    if status.starts_with("error:") {
-        return Err(format!("{} switch failed: {}", kind.display_name(), status));
-    }
-    if status == "pending" {
-        return Err(format!(
-            "Timed out waiting for {} switch",
-            kind.display_name()
-        ));
-    }
-    if !status.starts_with("success:") {
-        return Err(format!(
-            "Unexpected {} switch status: {status}",
-            kind.display_name()
-        ));
-    }
+    let selected = interpret_selection_status(kind, &status)?;
 
     if verbose {
-        println!("{} switched successfully ({status})", kind.display_name());
+        println!("{} switched successfully ({selected})", kind.display_name());
     }
     thread::sleep(Duration::from_millis(500));
 
@@ -5006,6 +7153,12 @@ fn switch_model(
     if model.trim().is_empty() {
         return Err("Empty model name".to_string());
     }
+    if !provider.capabilities().model_selection {
+        return Err(format!(
+            "{} does not support --model in this ask-bridge version.",
+            provider.display_name()
+        ));
+    }
     if provider != Provider::Claude {
         return switch_semantic_option(
             config_path,
@@ -5080,6 +7233,12 @@ fn switch_reasoning(
     reasoning: ReasoningRequest,
     verbose: bool,
 ) -> Result<(), String> {
+    if !provider.capabilities().reasoning {
+        return Err(format!(
+            "{} does not support --reasoning in this ask-bridge version.",
+            provider.display_name()
+        ));
+    }
     switch_semantic_option(
         config_path,
         provider,
@@ -6067,7 +8226,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let session_target = match cli.session.as_deref() {
+    if let Err(e) = validate_provider_feature_support(provider, &cli) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+
+    let session_target = match session_input(&cli) {
         Some(session) => match resolve_session_target(provider, cli.provider.is_some(), session) {
             Ok(target) => {
                 provider = target.0;
@@ -6082,6 +8246,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Err(e) = validate_provider_feature_support(provider, &cli) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+
+    if let Err(e) = validate_attachment_inputs(provider, &cli.images, &cli.files) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -6177,7 +8346,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
 
-                    match copy_latest_markdown(&config_path, page_provider) {
+                    match copy_latest_markdown_for_request(
+                        &config_path,
+                        page_provider,
+                        cli.image_output.as_deref(),
+                    ) {
                         Ok(markdown) => {
                             if let Some(ref output_path) = cli.output {
                                 let _ = std::fs::write(output_path, &markdown).map_err(|e| {
@@ -6189,13 +8362,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 eprintln!("Error rendering Markdown: {}", e);
                                 std::process::exit(1);
                             }
-                            if let Err(e) = download_images_from_latest_message(
-                                &config_path,
-                                page_provider,
-                                cli.image_output.as_deref(),
-                                command_verbose,
-                            ) {
+                            if page_provider.capabilities().image_download
+                                && let Err(e) = download_images_from_latest_message(
+                                    &config_path,
+                                    page_provider,
+                                    cli.image_output.as_deref(),
+                                    command_verbose,
+                                )
+                            {
                                 eprintln!("Error downloading images: {}", e);
+                                if page_provider == Provider::M365Copilot
+                                    && cli.image_output.is_some()
+                                {
+                                    std::process::exit(1);
+                                }
                             }
                         }
                         Err(e) => {
@@ -6245,7 +8425,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                match copy_latest_markdown(&config_path, page_provider) {
+                match copy_latest_markdown_for_request(
+                    &config_path,
+                    page_provider,
+                    cli.image_output.as_deref(),
+                ) {
                     Ok(markdown) => {
                         if let Some(ref output_path) = cli.output {
                             let _ = std::fs::write(output_path, &markdown).map_err(|e| {
@@ -6257,13 +8441,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             eprintln!("Error rendering Markdown: {}", e);
                             std::process::exit(1);
                         }
-                        if let Err(e) = download_images_from_latest_message(
-                            &config_path,
-                            page_provider,
-                            cli.image_output.as_deref(),
-                            command_verbose,
-                        ) {
+                        if page_provider.capabilities().image_download
+                            && let Err(e) = download_images_from_latest_message(
+                                &config_path,
+                                page_provider,
+                                cli.image_output.as_deref(),
+                                command_verbose,
+                            )
+                        {
                             eprintln!("Error downloading images: {}", e);
+                            if page_provider == Provider::M365Copilot && cli.image_output.is_some()
+                            {
+                                std::process::exit(1);
+                            }
                         }
                     }
                     Err(e) => {
@@ -6464,13 +8654,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Verify login
     match check_login_status(&config_path, provider, command_verbose) {
         Ok(LoginState::LoggedOut) => {
+            if provider == Provider::M365Copilot {
+                eprintln!(
+                    "\nError: authentication: You are not logged in to Microsoft 365 Copilot."
+                );
+                eprintln!(
+                    "Run `ask-bridge --provider m365 login` and complete Microsoft Entra sign-in manually.\n"
+                );
+            } else {
+                eprintln!(
+                    "\nError: You are not logged in to {}.",
+                    provider.display_name()
+                );
+                eprintln!(
+                    "Please run `ask-bridge --provider {} login` to log in manually first, and then run your query again.\n",
+                    provider
+                );
+            }
+            std::process::exit(1);
+        }
+        Ok(LoginState::Unknown) if provider == Provider::M365Copilot => {
             eprintln!(
-                "\nError: You are not logged in to {}.",
-                provider.display_name()
+                "Error: authentication: Could not safely confirm the Microsoft 365 Copilot login state."
             );
             eprintln!(
-                "Please run `ask-bridge --provider {} login` to log in manually first, and then run your query again.\n",
-                provider
+                "Run `ask-bridge --provider m365 login` in a visible browser and complete any Microsoft Entra or Conditional Access verification."
             );
             std::process::exit(1);
         }
@@ -6481,6 +8689,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Ok(LoginState::LoggedIn) => {}
+        Err(e) if provider == Provider::M365Copilot => {
+            eprintln!(
+                "Error: authentication: Failed to verify the Microsoft 365 Copilot login state: {}",
+                e
+            );
+            eprintln!("Run `ask-bridge --provider m365 login` in a visible browser and retry.");
+            std::process::exit(1);
+        }
         Err(e) if command_verbose => {
             eprintln!(
                 "Warning: Failed to verify login status: {}. Attempting to proceed...",
@@ -6488,6 +8704,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Err(_) => {}
+    }
+
+    if let Some((session_provider, session_url)) = &session_target
+        && let Err(error) = verify_resumed_session(&config_path, *session_provider, session_url)
+    {
+        eprintln!("Error: {error}");
+        std::process::exit(1);
     }
 
     // Switch model if requested (before uploading attachments / typing the prompt)
@@ -6550,7 +8773,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_markdown = String::new();
     let mut finished = false;
     let mut wait_cycles = 0;
-    let mut stable_done_checks = 0;
+    let mut completion_tracker = ResponseCompletionTracker::default();
+    let requires_text_stability = provider == Provider::M365Copilot;
     let spinner_frames = vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let mut spinner_idx = 0;
 
@@ -6573,8 +8797,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let stop_selectors = provider.stop_button_selectors_json();
             let assistant_selector = serde_json::to_string(provider.assistant_selector())
                 .map_err(|e| format!("Failed to serialize assistant selector: {}", e))?;
+            let content_selector = serde_json::to_string(provider.response_content_selector())
+                .map_err(|e| format!("Failed to serialize response content selector: {}", e))?;
             let response_check_js = r#"() => {
                     const stopSelectors = __STOP_SELECTORS__;
+                    const contentSelector = __CONTENT_SELECTOR__;
                     const isVisible = (el) => {
                         if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
                         const style = window.getComputedStyle(el);
@@ -6585,18 +8812,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     const stopButton = stopSelectors.map((selector) => document.querySelector(selector)).find(isVisible);
                     const messages = document.querySelectorAll(__ASSISTANT_SELECTOR__);
                     const isNew = messages.length > __INITIAL_COUNT__;
+                    const latest = messages[messages.length - 1];
+                    const contentRoot = latest
+                        ? (contentSelector ? (latest.querySelector(contentSelector) || latest) : latest)
+                        : null;
+                    const responseText = (contentRoot?.innerText || contentRoot?.textContent || '').trim();
+                    let contentHash = 2166136261;
+                    for (let index = 0; index < responseText.length; index++) {
+                        contentHash ^= responseText.charCodeAt(index);
+                        contentHash = Math.imul(contentHash, 16777619);
+                    }
                     
                     if (isVisible(stopButton)) {
-                        return { status: "generating", isNew: isNew };
+                        return {
+                            status: "generating",
+                            isNew: isNew,
+                            contentLength: responseText.length,
+                            contentHash: contentHash >>> 0
+                        };
                     }
                     
                     if (isNew) {
-                        return { status: "done", isNew: isNew };
+                        return {
+                            status: "done",
+                            isNew: isNew,
+                            contentLength: responseText.length,
+                            contentHash: contentHash >>> 0
+                        };
                     }
                     
-                    return { status: "waiting", isNew: isNew };
+                    return {
+                        status: "waiting",
+                        isNew: isNew,
+                        contentLength: responseText.length,
+                        contentHash: contentHash >>> 0
+                    };
                 }"#
             .replace("__STOP_SELECTORS__", stop_selectors)
+            .replace("__CONTENT_SELECTOR__", &content_selector)
             .replace("__ASSISTANT_SELECTOR__", &assistant_selector)
             .replace("__INITIAL_COUNT__", &initial_assistant_count.to_string());
             let check_res = match call_mcp_tool(
@@ -6624,15 +8877,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(parsed) = parse_script_result(&check_res) {
                 let status = parsed["status"].as_str().unwrap_or("waiting");
                 let is_new = parsed["isNew"].as_bool().unwrap_or(false);
-
-                if status == "done" && is_new {
-                    stable_done_checks += 1;
-                    if stable_done_checks >= 3 {
-                        finished = true;
-                    }
-                } else {
-                    stable_done_checks = 0;
-                }
+                let content_length = parsed["contentLength"].as_u64().unwrap_or(0);
+                let content_hash = parsed["contentHash"].as_u64().unwrap_or(0);
+                finished = completion_tracker.observe(
+                    status,
+                    is_new,
+                    content_length,
+                    content_hash,
+                    requires_text_stability,
+                );
             }
         }
 
@@ -6646,6 +8899,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !finished {
+        if provider == Provider::M365Copilot {
+            return Err(format!(
+                "Microsoft 365 Copilot response did not complete within {} seconds",
+                cli.timeout
+            )
+            .into());
+        }
         eprintln!(
             "\nWarning: Output stream did not complete within the timeout period ({} seconds).",
             cli.timeout
@@ -6659,34 +8919,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 provider.display_name()
             );
         }
-        match copy_latest_markdown(&config_path, provider) {
-            Ok(content) => {
-                last_markdown = content;
-            }
-            Err(e) => {
-                eprintln!(
-                    "Error copying response from {} toolbar: {}",
+        last_markdown =
+            copy_latest_markdown_for_request(&config_path, provider, cli.image_output.as_deref())
+                .map_err(|e| {
+                format!(
+                    "Failed to copy response from {} toolbar or DOM: {}",
                     provider.display_name(),
                     e
-                );
-            }
-        }
+                )
+            })?;
     }
 
     if let Err(e) = render_markdown(&last_markdown, use_glow) {
         eprintln!("Error rendering Markdown: {}", e);
     }
 
-    if finished {
-        let _ = download_images_from_latest_message(
+    if finished
+        && provider.capabilities().image_download
+        && let Err(error) = download_images_from_latest_message(
             &config_path,
             provider,
             cli.image_output.as_deref(),
             command_verbose,
         )
-        .map_err(|e| {
-            eprintln!("Error downloading images: {}", e);
-        });
+    {
+        eprintln!("Error downloading images: {error}");
+        if provider == Provider::M365Copilot && cli.image_output.is_some() {
+            std::process::exit(1);
+        }
     }
 
     // Print the URL link of the current conversation thread

@@ -1,13 +1,13 @@
 ---
 name: ask-bridge
-description: "完整使用 ask-bridge CLI 的 Agent Skill。使用 ask-bridge 將低風險、探索性 AI 研究、摘要、文件分析、程式片段分析、錯誤訊息整理、方案比較、初稿產出或可委派的背景調查交給 ChatGPT、Gemini 或 Claude 網站。當 Codex 需要透過本機 ask-bridge 命令呼叫網站型 AI、利用 ChatGPT/Gemini/Claude 網頁額度、附加檔案或圖片、切換模型、設定逾時、取回或儲存回覆、下載生成圖片、管理瀏覽器 session、更新 ask-bridge，或查詢所有參數與子命令用法時使用。"
+description: "完整使用 ask-bridge CLI 的 Agent Skill。使用 ask-bridge 將低風險、探索性 AI 研究、摘要、文件分析、程式片段分析、錯誤訊息整理、方案比較、初稿產出或可委派的背景調查交給 ChatGPT、Gemini、Claude 或實驗性的 Microsoft 365 Copilot 網站。當 Codex 需要透過本機 ask-bridge 命令呼叫網站型 AI、利用網站額度、設定逾時、取回或儲存回覆，或在支援的 provider 使用附件、模型、圖片下載與 session 時使用。"
 ---
 
 # Ask Bridge
 
 ## 核心原則
 
-使用 `ask-bridge` 把低風險、探索性、可委派的 AI 任務交給 ChatGPT、Gemini 或 Claude 網站處理，再將回覆作為本機工作流程的參考輸入。不要把 provider 回覆視為事實來源、測試結果或已完成的程式碼變更。
+使用 `ask-bridge` 把低風險、探索性、可委派的 AI 任務交給 ChatGPT、Gemini、Claude 或 Microsoft 365 Copilot 網站處理，再將回覆作為本機工作流程的參考輸入。不要把 provider 回覆視為事實來源、測試結果或已完成的程式碼變更。
 
 優先把主要 Coding Agent 保留給下列工作：讀取專案脈絡、修改檔案、執行測試、驗證行為、整合結論。把 `ask-bridge` 用於背景研究、摘要、候選方案、初稿與輔助分析。
 
@@ -87,9 +87,17 @@ ask-bridge --version
 }
 ```
 
+或：
+
+```json
+{
+  "provider": "m365"
+}
+```
+
 provider 優先序：
 
-1. CLI `--provider chatgpt|gemini|claude`
+1. CLI `--provider chatgpt|gemini|claude|m365`
 2. `~/.config/ask-bridge/config.json` 的 `provider`
 3. 內建預設 `chatgpt`
 
@@ -98,6 +106,7 @@ provider 優先序：
 ```sh
 ask-bridge config --provider gemini
 ask-bridge config --provider claude
+ask-bridge config --provider m365
 ```
 
 若要改回 ChatGPT：
@@ -124,10 +133,12 @@ ask-bridge --provider chatgpt '請摘要這段內容。'
 ask-bridge login
 ask-bridge --provider gemini login
 ask-bridge --provider claude login
+ask-bridge --provider m365 login
 ask-bridge login --provider gemini
 ```
 
 若目前任務不適合中斷等待登入，回報需要使用者完成登入，不要反覆重試。
+M365 登入必須讓使用者在可見 Chrome 中自行完成 Microsoft Entra、MFA 或 Conditional Access；不得嘗試繞過組織政策。
 
 ## 委派決策
 
@@ -159,6 +170,7 @@ ask-bridge [OPTIONS] [PROMPT] [COMMAND]
 ```sh
 ask-bridge '請摘要下列錯誤訊息，列出可能原因與下一步檢查。'
 ask-bridge --provider gemini '請比較這三個實作方向的風險與取捨。'
+ask-bridge --provider m365 '請整理近期值得關注的 Rust 生態系發展。'
 cat report.md | ask-bridge '請摘要這份文件，列出待辦。'
 ask-bridge '請摘要這份規格文件。' --file docs/spec.md -o /tmp/spec-summary.md
 ask-bridge '請描述這張截圖中的 UI 問題。' --image screenshot.png
@@ -177,19 +189,21 @@ prompt + "\n\n" + stdin
 | 參數 | 用途 | 用法重點 |
 |---|---|---|
 | `[PROMPT]` | 要送給 provider 的文字 prompt | 可省略；若 stdin 有內容則使用 stdin；若兩者都有，會以兩個換行串接 |
-| `-p`, `--provider <PROVIDER>` | 選擇 provider | 可用 `chatgpt`、`gemini` 或 `claude`；此為 global option，可放在子命令前後；優先權高於全域設定檔 |
+| `-p`, `--provider <PROVIDER>` | 選擇 provider | 可用 `chatgpt`、`gemini`、`claude` 或 `m365`；此為 global option，可放在子命令前後；優先權高於全域設定檔 |
 | `--headless[=<HEADLESS>]` | 控制 Chrome 是否 headless | 預設 `true`；要顯示瀏覽器請用 `--headless=false`；不要寫成 `--headless false` |
 | `--new` | 開啟全新 provider 對話 | 會開啟並綁定新的唯一分頁，同時保留所有既有頁籤；用於隔離上下文 |
-| `--session <URL_OR_ID>` | 接續既有 provider 對話 | 可傳完整對話 URL 或對話 ID；`--session-id`、`--session-url` 為別名；不能與 `--new` 同時使用 |
+| `--session <URL_OR_ID>` | 接續既有 provider 對話 | 依值判定 URL 或 ID；與 `--session-id`、`--session-url`、`--new` 互斥。Windows experimental M365 僅接受 URL |
+| `--session-id <ID>` | 以 raw ID 接續對話 | ChatGPT、Gemini、Claude 支援；M365 V2 採 URL-only，不支援 raw ID |
+| `--session-url <URL>` | 以完整 HTTPS URL 接續對話 | URL 可推論 provider；Windows experimental M365 可用 |
 | `-v`, `-V`, `--version` | 顯示版本 | `-V` 是原始碼中定義的短別名；文件與一般操作優先用 `-v` 或 `--version` |
 | `--verbose` | 顯示瀏覽器自動化流程 | 用於診斷 provider UI、登入、上傳、模型切換或等待回覆問題 |
 | `-o`, `--output <FILE>` | 將最終 Markdown 回覆寫入檔案 | 同時仍會在終端機輸出渲染結果；適合保留研究紀錄 |
-| `-i`, `--image-output <IMAGE_PATH>` | 下載 provider 回覆中的生成圖片 | 可指定資料夾或檔案路徑；可搭配一般 prompt、`get` 或 `open <url>` |
-| `--image <IMAGE_FILE>` | 附加圖片檔，可重複指定 | 支援 ChatGPT 與 Claude；搭配 Gemini 會失敗 |
-| `--file <FILE>` | 附加文件檔，可重複指定 | 支援 PDF、Word、Excel、PowerPoint、純文字、Markdown、CSV、JSON、程式碼等；ChatGPT、Gemini 與 Claude 都可用 |
+| `-i`, `--image-output <IMAGE_PATH>` | 下載 provider 回覆中的生成圖片 | Windows experimental M365 必須顯式指定；未指定時不得掃描或寫檔 |
+| `--image <IMAGE_FILE>` | 附加圖片檔，可重複指定 | 支援 ChatGPT 與 Claude；Windows experimental M365 支援 PNG／JPEG |
+| `--file <FILE>` | 附加文件檔，可重複指定 | ChatGPT、Gemini 與 Claude 可用；Windows experimental M365 僅支援 PDF／DOCX／TXT |
 | `--timeout <SECONDS>` | 設定等待上限 | 必須是大於 0 的整數，預設 `300` 秒；同時套用於一般回覆與 `login` 登入偵測 |
-| `--model <MODEL>` | 送出 prompt 前切換模型 | 比對不分大小寫與標點；模型名稱取決於 provider UI 與帳號權限 |
-| `--reasoning <REASONING>` | 切換 provider 推理模式 | ChatGPT 支援 `auto`、`instant`、`medium`、`high`；Gemini 支援 `extended`；Claude 不支援 |
+| `--model <MODEL>` | 送出 prompt 前切換模型 | Windows experimental M365 支援 `GPT 5.6`、`GPT 5.5`、`Sonnet`、`Opus` |
+| `--reasoning <REASONING>` | 切換 provider 推理模式 | ChatGPT 支援四種值；Gemini 支援 `extended`；Windows experimental M365 支援 `auto`／`自動`、`quick`／`快速回應`、`think-deeper`／`深度思考`；Claude 不支援 |
 | `-h`, `--help` | 顯示 help | 可用 `ask-bridge --help` 或 `ask-bridge help <COMMAND>` |
 
 只有 `--provider` 是 global option，可放在子命令前後。其他頂層選項搭配子命令時必須放在子命令之前，例如 `ask-bridge --timeout 600 login`、`ask-bridge --output /tmp/reply.md get <url>`；不要寫成 `ask-bridge login --timeout 600` 或 `ask-bridge get <url> --output ...`。
@@ -204,13 +218,14 @@ ask-bridge --provider chatgpt '請分析這段程式碼的風險。'
 ask-bridge -p chatgpt '請整理這份文件的待辦。'
 ```
 
-使用 Gemini 或 Claude 時明確指定 provider：
+使用 Gemini、Claude 或 M365 時明確指定 provider：
 
 ```sh
 ask-bridge --provider gemini '請比較這三個實作方向的風險與取捨。'
 ask-bridge -p gemini '請摘要這份文件。' --file notes.md
 ask-bridge --provider claude '請初步分析這段程式碼的風險。'
 ask-bridge -p claude '請摘要這份文件。' --file notes.md
+ask-bridge --provider m365 '請摘要這段公開資訊。'
 ```
 
 選擇原則：
@@ -219,6 +234,7 @@ ask-bridge -p claude '請摘要這份文件。' --file notes.md
 - 使用 ChatGPT 作為未設定時的預設 provider。
 - 使用 Gemini 做替代觀點、快速摘要或使用者明確要求 Gemini 時。
 - 使用 Claude 做程式碼分析、長文摘要、替代觀點或使用者明確要求 Claude 時；Claude 也支援 `--image` 圖片輸入。
+- 使用 M365 做純文字研究、摘要或使用者明確要求 Microsoft 365 Copilot 時。只有 Windows 可使用 experimental V2 session、picker、附件與圖片下載；macOS／Linux 仍限純文字。
 - 若 provider 失敗，可在不增加風險的情況下改用另一個 provider 一次。
 - 不要硬編不存在的模型名稱；只有使用者指定或專案文件明確列出時才使用 `--model`。
 
@@ -332,7 +348,7 @@ ask-bridge --provider gemini '證明這個數學問題。' --model '3.1 Pro' --r
 ask-bridge --provider claude '用幾句話介紹 Rust。' --model Sonnet
 ```
 
-ChatGPT 的 `--reasoning` 支援 `auto`、`instant`、`medium`、`high` 與對應中文別名；Gemini 只支援 `extended`，且不能搭配非 Pro 模型；Claude 不支援 `--reasoning`。
+ChatGPT 的 `--reasoning` 支援 `auto`、`instant`、`medium`、`high` 與對應中文別名；Gemini 只支援 `extended`，且不能搭配非 Pro 模型；Claude 不支援 `--reasoning`。Windows experimental M365 可使用已列出的 `--model` 或 `--reasoning`，但兩者共用同一 UI control，不得併用。
 
 模型只比對 provider 選單的主標籤，忽略副標題與 badge，且不會把不存在的舊版本自動對應到其他版本。若切換失敗，應依錯誤列出的目前選項修正參數，不要猜測替代模型名稱。舊用法 `--model 高` 與 `--model 延伸思考` 暫時可用，但應改成 `--reasoning`。
 
@@ -345,7 +361,7 @@ ChatGPT 的 `--reasoning` 支援 `auto`、`instant`、`medium`、`high` 與對�
 - **格式**：`@Agent名稱 prompt正文`
 - **名稱限制**：Agent 名稱必須由 1 至 10 個非空白字元組成。
 - **正文限制**：Agent 名稱後必須至少有一個空白，且去除前導空白後的正文不可為空。
-- **Provider 限制**：特殊處理只適用於 ChatGPT；Gemini 與 Claude 會將相同內容視為一般文字 prompt。
+- **Provider 限制**：特殊處理只適用於 ChatGPT；Gemini、Claude 與 M365 會將相同內容視為一般文字 prompt。
 - **Fallback**：格式不符合時，不會觸發 Agent mention 流程，而會按照一般 prompt 處理。
 
 ### 使用範例
@@ -377,6 +393,7 @@ ask-bridge --session-url 'https://chatgpt.com/c/conversation-uuid' '請產出下
 
 完整 URL 會辨識 provider；若同時明確指定不同的 `--provider`，命令會停止。
 不要使用對話標題猜測 session，也不要將 `--session` 與 `--new` 同時使用。
+M365 V2 採 URL-only session 設計，raw `--session-id` 永遠不得猜測或重建。Windows 可使用完整 conversation URL；macOS／Linux 會在啟動 Chrome 前拒絕 M365 V2 session。
 
 一般提問預設 `--headless=true`。需要觀察 Chrome 操作時使用：
 
@@ -399,9 +416,9 @@ ask-bridge close
 
 | 子命令 | 用途 | 範例 |
 |---|---|---|
-| `login` | 開啟 provider 並等待使用者手動登入 | `ask-bridge login`、`ask-bridge --provider gemini login`、`ask-bridge --provider claude login` |
+| `login` | 開啟 provider 並等待使用者手動登入 | `ask-bridge login`、`ask-bridge --provider gemini login`、`ask-bridge --provider claude login`、`ask-bridge --provider m365 login` |
 | `close` | 關閉 ask-bridge 管理的 Chrome instance | `ask-bridge close` |
-| `config` | 顯示或設定全域預設 provider | `ask-bridge config`、`ask-bridge config --provider claude` |
+| `config` | 顯示或設定全域預設 provider | `ask-bridge config`、`ask-bridge config --provider m365` |
 | `update` | 依作業系統執行官方安裝流程並重新安裝 | `ask-bridge update` |
 | `help` | 顯示 help | `ask-bridge help`、`ask-bridge help login` |
 
@@ -448,6 +465,8 @@ ask-bridge --headless=false screenshot
 ```
 
 Gemini 圖片輸入不支援時，改用 ChatGPT 或 Claude，或改以文字描述圖片內容。不要把同一個失敗命令無限制重試。
+
+M365 純文字功能維持跨平台；V2 為 Windows-only experimental。Windows 可使用 URL-only session、picker、PDF／DOCX／TXT、PNG／JPEG 與顯式圖片下載；macOS／Linux 對 V2 旗標 fail-fast。若登入狀態為 Unknown、token 過期、需要 MFA 或遇到 Conditional Access，執行 `ask-bridge --provider m365 login` 並由使用者在可見 Chrome 中完成驗證。DLP 尚未完成專用租戶驗證；任何 policy denial 都必須停止，不得改走 DataTransfer、canvas、paste 或其他繞過路徑。
 
 模型切換失敗時，移除 `--model` 或改用 provider 預設模型，不要猜測替代模型名稱。
 

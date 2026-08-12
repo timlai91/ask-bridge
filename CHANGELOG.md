@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 🚀 新增 (Added)
+- 新增 experimental `--provider m365`，透過 Microsoft 365 Copilot Chat 網頁 UI 支援 Microsoft Entra 手動登入、純文字 prompt、Markdown／純文字回覆、`--new`、`--output`、`--timeout`、Thread Link 與隱藏的 `open`／`get` 維護流程。
+- M365 回覆優先使用 Copy Response，剪貼簿不可用時改用 DOM Markdown scraper；支援標題、清單、粗斜體、inline code、code block、一般連結與 Copilot citation URL。
+- 新增集中式 provider capability matrix，M365 第一版會在 Chrome 啟動前明確拒絕 `--session`、`--model`、`--reasoning`、`--image`、`--file` 與 `--image-output`。
+- 完成 M365 V2 選配能力的 provider-specific 實作骨架：URL-only session 契約、model／reasoning selection kind、PDF／DOCX／TXT、PNG／JPEG、附件狀態與最新 assistant 生成圖片顯式下載。
+- Session CLI 改為可辨識來源且互斥的 `--session`、`--session-id`、`--session-url`；既有 ChatGPT、Gemini、Claude 仍支援 URL 與 raw ID。
+- 新增 M365 Node fixtures 與 Rust tests，覆蓋 nested picker、selected state、available options、附件 allowlist／`accept`、generated image 過濾、bytes 判型與防覆寫命名。
+- 在 Windows 開放 experimental M365 V2：URL-only session、model、reasoning、PDF／DOCX／TXT、PNG／JPEG 與顯式 generated-image download；macOS／Linux 對 V2 旗標維持 browser-before fail-fast。
+
+### 🔧 修復 (Fixed)
+- M365 picker 與 upload control 會等待 hydration，避免新對話頁的暫態 `not found`。
+- M365 model／reasoning helper 可拆分同一行的主標籤與副標題，並支援 zh-TW `自動`、`快速回應`、`深度思考` 與 `上傳影像和檔案`。
+- M365 附件狀態可辨識 `upload in progress`、百分比、unsupported type、empty file、部分失敗與 retry，不再把 pending 或全域錯誤誤判成功。
+- M365 純圖片回覆在明確指定 `--image-output` 時可略過空 Markdown，繼續下載最新 assistant generated image；無圖片仍回傳非零錯誤。
+
+### ⚠️ 已知限制 (Known limitations)
+- M365 provider 目前只以 Windows／en-US Microsoft 365 UI 完成實站驗證，仍需補齊 zh-TW、macOS、第二帳號／租戶、MFA 與 Conditional Access 矩陣。
+- Windows en-US／zh-TW 單一帳號已觀察並驗證 `/chat/conversation/<id>`、reasoning、model、PDF／DOCX／TXT、PNG／JPEG 與 data URL generated image。
+- M365 V2 採 URL-only session 設計，raw `--session-id` 不支援。
+- DLP blocked、macOS、第二帳號／租戶與 HTTP/blob generated image 尚未實站驗證；DLP 列 Windows experimental 已知限制，macOS 待日後矩陣完成再開放。
+
 ---
 
 ## [0.2.5] - 2026-07-10

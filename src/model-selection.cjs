@@ -41,6 +41,11 @@
       badgeText,
       selected: textMarksSelected
         || selectedValues.some((value) => ['true', 'checked', 'selected'].includes(value)),
+      unavailable: Boolean(source.disabled)
+        || /^(?:true|disabled)$/i.test(String(source.ariaDisabled || ''))
+        || /\b(?:locked|unavailable|not available)\b|已鎖定|已锁定|無法使用|无法使用/i.test(
+          lines.join(' '),
+        ),
       element: source.element,
     };
   }
@@ -71,7 +76,26 @@
       : '';
   }
 
-  function entryFromElement(element) {
+  function splitM365Label(entry, kind) {
+    const observedLabels = kind === 'reasoning'
+      ? ['Quick response', 'Think deeper', '快速回應', '快速回应', '深度思考', 'Auto', '自動']
+      : ['GPT 5.6', 'GPT 5.5', 'Sonnet', 'Opus'];
+    const primaryLabel = observedLabels.find((label) => (
+      normalizeLabel(entry.primaryLabel).startsWith(normalizeLabel(label))
+    ));
+    if (!primaryLabel) return entry;
+    const secondaryDescription = entry.primaryLabel.slice(primaryLabel.length).trim();
+    return {
+      ...entry,
+      primaryLabel,
+      secondaryDescription: [
+        secondaryDescription,
+        entry.secondaryDescription,
+      ].filter(Boolean).join(' '),
+    };
+  }
+
+  function entryFromElement(element, config = {}) {
     const badge = element.querySelector
       ? element.querySelector('[data-testid*="badge"], [class*="badge"]')
       : null;
@@ -80,7 +104,7 @@
         '[aria-checked="true"], [aria-selected="true"], [data-selected="true"], [data-state="checked"]',
       )
       : null;
-    return parseMenuEntry({
+    const entry = parseMenuEntry({
       text: textOf(element),
       ariaChecked: element.getAttribute('aria-checked')
         || (selectedDescendant && selectedDescendant.getAttribute('aria-checked')),
@@ -91,8 +115,13 @@
       dataState: element.getAttribute('data-state')
         || (selectedDescendant && selectedDescendant.getAttribute('data-state')),
       badgeText: textOf(badge),
+      disabled: Boolean(element.disabled),
+      ariaDisabled: element.getAttribute('aria-disabled'),
       element,
     });
+    return config.provider === 'm365'
+      ? splitM365Label(entry, config.kind)
+      : entry;
   }
 
   function visibleElements(selector) {
@@ -148,22 +177,50 @@
         ].filter(Boolean).join(' '))
       ));
     }
+    if (provider === 'm365') {
+      const exact = visibleElements('#gptModeSwitcher').find((button) => !button.closest('nav'));
+      if (exact) return exact;
+
+      return visibleElements('main button[aria-haspopup="menu"]').find((button) => (
+        !button.closest('nav')
+        && /model selector|模型選擇器|模型选择器/i.test([
+          button.getAttribute('aria-label'),
+          button.textContent,
+        ].filter(Boolean).join(' '))
+      ));
+    }
     return undefined;
+  }
+
+  function m365EntryKind(entry) {
+    const role = entry.element.getAttribute('role');
+    if (role !== 'menuitemradio' && role !== 'option') return undefined;
+    const menu = entry.element.closest ? entry.element.closest('[role="menu"], [role="listbox"]') : null;
+    if (!menu || !menu.querySelector) return undefined;
+    return menu.querySelector('[role="menuitem"][aria-haspopup="menu"]')
+      ? 'reasoning'
+      : 'model';
+  }
+
+  function isCandidateEntry(entry, config) {
+    if (entry.element.getAttribute('aria-haspopup') === 'menu') return false;
+    if (config.provider !== 'm365') return true;
+    return m365EntryKind(entry) === config.kind;
   }
 
   async function findProviderOption(config, menuSelector, available, sleep) {
     const visited = new Set();
-    const maxDepth = config.provider === 'chatgpt' ? 6 : 1;
+    const canTraverseNested = config.provider === 'chatgpt'
+      || (config.provider === 'm365' && config.kind === 'model');
+    const maxDepth = canTraverseNested ? 6 : 1;
 
     for (let depth = 0; depth < maxDepth; depth += 1) {
       const elements = visibleElements(menuSelector);
-      const entries = elements.map(entryFromElement);
-      entries.forEach((entry) => available.add(entry.primaryLabel));
-      const leaves = entries.filter(
-        (entry) => entry.element.getAttribute('aria-haspopup') !== 'menu',
-      );
+      const entries = elements.map((element) => entryFromElement(element, config));
+      const leaves = entries.filter((entry) => isCandidateEntry(entry, config));
+      leaves.forEach((entry) => available.add(entry.primaryLabel));
       const chosen = findMatchingEntry(leaves, config.targetAliases);
-      if (chosen || config.provider !== 'chatgpt') return chosen;
+      if (chosen || !canTraverseNested) return chosen;
 
       const triggers = entries.filter(
         (entry) => entry.element.getAttribute('aria-haspopup') === 'menu',
@@ -184,6 +241,41 @@
     return undefined;
   }
 
+  function captureM365ComposerState() {
+    const composer = document.querySelector(
+      '#m365-chat-editor-target-element, #m365-chat-input-shared-container [role="textbox"][contenteditable="true"]',
+    );
+    const scope = document.querySelector('#m365-chat-input-shared-container');
+    const attachmentSelector = [
+      '[data-testid*="attachment" i]',
+      '[data-testid*="upload" i]',
+      '[class*="attachment" i]',
+      '[class*="file-chip" i]',
+    ].join(', ');
+    const attachments = scope
+      ? visibleElements(attachmentSelector)
+        .filter((element) => scope.contains(element))
+        .map((element) => textOf(element).replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+      : [];
+    return {
+      composerText: textOf(composer).trim(),
+      attachments: [...new Set(attachments)],
+    };
+  }
+
+  function composerStatePreserved(before, after) {
+    return before.composerText === after.composerText
+      && JSON.stringify(before.attachments) === JSON.stringify(after.attachments);
+  }
+
+  function m365AuthRedirected() {
+    return typeof window === 'object'
+      && /^(?:login\.microsoftonline\.com|login\.live\.com)$/i.test(
+        window.location?.hostname || '',
+      );
+  }
+
   async function selectProviderOption(config) {
     const sleep = config.sleep
       || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
@@ -197,8 +289,16 @@
     }));
     await sleep(250);
 
+    if (config.provider === 'm365' && m365AuthRedirected()) {
+      return {
+        ok: false,
+        error: 'authentication: Microsoft sign-in is required during selection',
+        available: [],
+      };
+    }
+
     let picker;
-    if (config.provider === 'chatgpt') {
+    if (config.provider === 'chatgpt' || config.provider === 'm365') {
       for (let attempt = 0; attempt < 20; attempt += 1) {
         picker = findPicker(config.provider);
         if (picker) break;
@@ -209,11 +309,43 @@
     }
 
     if (!picker) {
+      if (config.provider === 'm365' && /\/chat\/conversation\//i.test(window.location.pathname)) {
+        return {
+          ok: false,
+          error: 'existing conversation does not allow model or reasoning changes; start with --new',
+          available: [],
+        };
+      }
+      if (config.provider === 'm365') {
+        return {
+          ok: false,
+          error: `${config.kind || 'selection'} picker not found; this may be a Microsoft 365 UI rollout`,
+          available: [],
+        };
+      }
       return { ok: false, error: `${config.provider} picker not found`, available: [] };
     }
+    if (picker.disabled || picker.getAttribute('aria-disabled') === 'true') {
+      return {
+        ok: false,
+        error: `${config.provider} picker is locked or unavailable`,
+        available: [],
+      };
+    }
 
+    const composerState = config.provider === 'm365'
+      ? captureM365ComposerState()
+      : undefined;
     dispatchClick(picker);
     await sleep(800);
+
+    if (config.provider === 'm365' && m365AuthRedirected()) {
+      return {
+        ok: false,
+        error: 'authentication: Microsoft sign-in expired during selection',
+        available: [],
+      };
+    }
 
     const chosen = await findProviderOption(config, menuSelector, available, sleep);
 
@@ -230,11 +362,46 @@
       };
     }
 
+    if (chosen.unavailable) {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape',
+        keyCode: 27,
+        bubbles: true,
+      }));
+      return {
+        ok: false,
+        error: `${chosen.primaryLabel} is locked or unavailable`,
+        available: [...available].filter(Boolean),
+      };
+    }
+
+    if (chosen.selected) {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape',
+        keyCode: 27,
+        bubbles: true,
+      }));
+      return {
+        ok: true,
+        selected: chosen.primaryLabel,
+        unchanged: true,
+        available: [...available].filter(Boolean),
+      };
+    }
+
     chosen.element.click();
     await sleep(600);
 
+    if (config.provider === 'm365' && m365AuthRedirected()) {
+      return {
+        ok: false,
+        error: 'authentication: Microsoft sign-in expired during selection',
+        available: [...available].filter(Boolean),
+      };
+    }
+
     picker = findPicker(config.provider) || picker;
-    let currentEntry = entryFromElement(chosen.element);
+    let currentEntry = entryFromElement(chosen.element, config);
     let verified = selectionVerified(
       currentEntry,
       textOf(picker),
@@ -258,6 +425,14 @@
       keyCode: 27,
       bubbles: true,
     }));
+
+    if (composerState && !composerStatePreserved(composerState, captureM365ComposerState())) {
+      return {
+        ok: false,
+        error: 'selection changed the composer prompt or attachments',
+        available: [...available].filter(Boolean),
+      };
+    }
 
     if (!verified) {
       return {

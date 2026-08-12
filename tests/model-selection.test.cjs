@@ -105,6 +105,7 @@ test('revisits ChatGPT nested menus when verifying a selected model', async () =
   const previousPointerEvent = global.PointerEvent;
   const pointerEventTypes = [];
   let menuState = 'closed';
+  let hasClicked = false;
 
   function element(text, attributes = {}, click = () => {}) {
     return {
@@ -139,9 +140,14 @@ test('revisits ChatGPT nested menus when verifying a selected model', async () =
       'aria-checked': () => (menuState === 'nested' ? 'true' : 'false'),
     },
     () => {
+      hasClicked = true;
       menuState = 'closed';
     },
   );
+  model.getAttribute = (name) => {
+    if (name === 'aria-checked') return hasClicked && menuState === 'nested' ? 'true' : 'false';
+    return null;
+  };
 
   global.KeyboardEvent = class KeyboardEvent {};
   global.MouseEvent = class MouseEvent {};
@@ -188,5 +194,348 @@ test('revisits ChatGPT nested menus when verifying a selected model', async () =
     global.KeyboardEvent = previousKeyboardEvent;
     global.MouseEvent = previousMouseEvent;
     global.PointerEvent = previousPointerEvent;
+  }
+});
+
+test('selects M365 reasoning only from the top-level model switcher menu', async () => {
+  const previousDocument = global.document;
+  const previousKeyboardEvent = global.KeyboardEvent;
+  const previousMouseEvent = global.MouseEvent;
+  const previousPointerEvent = global.PointerEvent;
+  let menuState = 'closed';
+  let selectedLabel = 'Auto';
+
+  function element(text, role, menu, click = () => {}, attributes = {}) {
+    return {
+      innerText: text,
+      textContent: text,
+      disabled: false,
+      click,
+      dispatchEvent() {},
+      getAttribute(name) {
+        if (name === 'role') return role;
+        if (name === 'aria-checked') return selectedLabel === text.split('\n')[0] ? 'true' : 'false';
+        return attributes[name] ?? null;
+      },
+      getClientRects() {
+        return [{}];
+      },
+      querySelector() {
+        return null;
+      },
+      closest(selector) {
+        return selector.includes('[role="menu"]') ? menu : null;
+      },
+    };
+  }
+
+  const topMenu = {
+    querySelector(selector) {
+      return selector === '[role="menuitem"][aria-haspopup="menu"]' ? {} : null;
+    },
+  };
+  const nestedMenu = { querySelector() { return null; } };
+  const picker = element('Auto', null, null, () => {
+    menuState = menuState === 'closed' ? 'top' : 'closed';
+  }, { 'aria-label': 'Model Selector', 'aria-haspopup': 'menu' });
+  const navigationPicker = {
+    ...picker,
+    click() {
+      throw new Error('navigation picker must not be clicked');
+    },
+    closest(selector) {
+      return selector === 'nav' ? {} : null;
+    },
+  };
+  const quick = element('Quick response Answers right away', 'menuitemradio', topMenu, () => {
+    selectedLabel = 'Quick response';
+    picker.innerText = selectedLabel;
+    picker.textContent = selectedLabel;
+    menuState = 'closed';
+  });
+  const gptTrigger = element('GPT\nOpenAI', 'menuitem', topMenu, () => {
+    menuState = 'nested';
+  }, { 'aria-haspopup': 'menu' });
+  const nestedModel = element('GPT 5.6 Think deeper', 'menuitemradio', nestedMenu);
+
+  global.KeyboardEvent = class KeyboardEvent {};
+  global.MouseEvent = class MouseEvent {};
+  global.PointerEvent = class PointerEvent {};
+  global.document = {
+    dispatchEvent() {},
+    querySelector(selector) {
+      if (selector.includes('#gptModeSwitcher')) return picker;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '#gptModeSwitcher') return [navigationPicker, picker];
+      if (selector === '[role="menuitem"], [role="menuitemradio"], [role="option"]') {
+        if (menuState === 'top') return [quick, gptTrigger];
+        if (menuState === 'nested') return [quick, gptTrigger, nestedModel];
+      }
+      return [];
+    },
+  };
+
+  try {
+    const result = await selectProviderOption({
+      provider: 'm365',
+      kind: 'reasoning',
+      targetAliases: ['quick response'],
+      verificationAliases: ['quick response'],
+      sleep: async () => {},
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.selected, 'Quick response');
+    assert.deepEqual(result.available, ['Quick response']);
+  } finally {
+    global.document = previousDocument;
+    global.KeyboardEvent = previousKeyboardEvent;
+    global.MouseEvent = previousMouseEvent;
+    global.PointerEvent = previousPointerEvent;
+  }
+});
+
+test('selects M365 nested models without treating reasoning subtitles as models', async () => {
+  const previousDocument = global.document;
+  const previousKeyboardEvent = global.KeyboardEvent;
+  const previousMouseEvent = global.MouseEvent;
+  const previousPointerEvent = global.PointerEvent;
+  let menuState = 'closed';
+  let selectedLabel = 'Auto';
+
+  function element(text, role, menu, click = () => {}, attributes = {}) {
+    return {
+      innerText: text,
+      textContent: text,
+      disabled: false,
+      click,
+      dispatchEvent() {},
+      getAttribute(name) {
+        if (name === 'role') return role;
+        if (name === 'aria-checked') return selectedLabel === text.split('\n')[0] ? 'true' : 'false';
+        return attributes[name] ?? null;
+      },
+      getClientRects() {
+        return [{}];
+      },
+      querySelector() {
+        return null;
+      },
+      closest(selector) {
+        return selector.includes('[role="menu"]') ? menu : null;
+      },
+    };
+  }
+
+  const topMenu = {
+    querySelector(selector) {
+      return selector === '[role="menuitem"][aria-haspopup="menu"]' ? {} : null;
+    },
+  };
+  const nestedMenu = { querySelector() { return null; } };
+  const picker = element('Auto', null, null, () => {
+    menuState = menuState === 'closed' ? 'top' : 'closed';
+  }, { 'aria-label': 'Model Selector', 'aria-haspopup': 'menu' });
+  const quick = element('Quick response Answers right away', 'menuitemradio', topMenu);
+  const gptTrigger = element('GPT\nOpenAI', 'menuitem', topMenu, () => {
+    menuState = 'nested';
+  }, { 'aria-haspopup': 'menu' });
+  const gpt56 = element('GPT 5.6 Think deeper', 'menuitemradio', nestedMenu, () => {
+    selectedLabel = 'GPT 5.6';
+    picker.innerText = selectedLabel;
+    picker.textContent = selectedLabel;
+    menuState = 'closed';
+  });
+
+  global.KeyboardEvent = class KeyboardEvent {};
+  global.MouseEvent = class MouseEvent {};
+  global.PointerEvent = class PointerEvent {};
+  global.document = {
+    dispatchEvent() {},
+    querySelector(selector) {
+      if (selector.includes('#gptModeSwitcher')) return picker;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '#gptModeSwitcher') return [picker];
+      if (selector === '[role="menuitem"], [role="menuitemradio"], [role="option"]') {
+        if (menuState === 'top') return [quick, gptTrigger];
+        if (menuState === 'nested') return [quick, gptTrigger, gpt56];
+      }
+      return [];
+    },
+  };
+
+  try {
+    const result = await selectProviderOption({
+      provider: 'm365',
+      kind: 'model',
+      targetAliases: ['GPT 5.6'],
+      verificationAliases: ['GPT 5.6'],
+      sleep: async () => {},
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.selected, 'GPT 5.6');
+    assert.deepEqual(result.available, ['GPT 5.6']);
+  } finally {
+    global.document = previousDocument;
+    global.KeyboardEvent = previousKeyboardEvent;
+    global.MouseEvent = previousMouseEvent;
+    global.PointerEvent = previousPointerEvent;
+  }
+});
+
+test('reports locked M365 options instead of option not found', () => {
+  const locked = parseMenuEntry({
+    text: 'Opus\nUnavailable for your organization',
+    ariaDisabled: 'true',
+  });
+  assert.equal(locked.primaryLabel, 'Opus');
+  assert.equal(locked.unavailable, true);
+});
+
+test('parses M365 primary labels without subtitles or badges', () => {
+  const entry = parseMenuEntry({
+    text: 'GPT 5.6\nThink deeper\nPremium',
+    badgeText: 'Premium',
+    ariaChecked: 'true',
+  });
+  assert.equal(entry.primaryLabel, 'GPT 5.6');
+  assert.equal(entry.secondaryDescription, 'Think deeper');
+  assert.equal(entry.badgeText, 'Premium');
+  assert.equal(entry.selected, true);
+});
+
+test('selects zh-TW M365 reasoning labels without matching subtitles', async () => {
+  const previousDocument = global.document;
+  const previousKeyboardEvent = global.KeyboardEvent;
+  const previousMouseEvent = global.MouseEvent;
+  const previousPointerEvent = global.PointerEvent;
+  let menuOpen = false;
+
+  const topMenu = {
+    querySelector(selector) {
+      return selector === '[role="menuitem"][aria-haspopup="menu"]' ? {} : null;
+    },
+  };
+  const picker = {
+    innerText: '自動',
+    textContent: '自動',
+    disabled: false,
+    click() {
+      menuOpen = !menuOpen;
+    },
+    dispatchEvent() {},
+    getAttribute(name) {
+      if (name === 'aria-label') return '模型選擇器';
+      if (name === 'aria-haspopup') return 'menu';
+      return null;
+    },
+    getClientRects() {
+      return [{}];
+    },
+    querySelector() {
+      return null;
+    },
+    closest() {
+      return null;
+    },
+  };
+  const quick = {
+    innerText: '快速回應 立即提供解答',
+    textContent: '快速回應 立即提供解答',
+    disabled: false,
+    click() {
+      picker.innerText = '快速回應';
+      picker.textContent = '快速回應';
+      menuOpen = false;
+    },
+    dispatchEvent() {},
+    getAttribute(name) {
+      if (name === 'role') return 'menuitemradio';
+      if (name === 'aria-checked') return picker.innerText === '快速回應' ? 'true' : 'false';
+      return null;
+    },
+    getClientRects() {
+      return [{}];
+    },
+    querySelector() {
+      return null;
+    },
+    closest(selector) {
+      return selector.includes('[role="menu"]') ? topMenu : null;
+    },
+  };
+
+  global.KeyboardEvent = class KeyboardEvent {};
+  global.MouseEvent = class MouseEvent {};
+  global.PointerEvent = class PointerEvent {};
+  global.document = {
+    dispatchEvent() {},
+    querySelector(selector) {
+      if (selector.includes('#m365-chat-editor-target-element')) return null;
+      if (selector === '#m365-chat-input-shared-container') return null;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '#gptModeSwitcher') return [picker];
+      if (
+        selector === '[role="menuitem"], [role="menuitemradio"], [role="option"]'
+        && menuOpen
+      ) return [quick];
+      return [];
+    },
+  };
+
+  try {
+    const result = await selectProviderOption({
+      provider: 'm365',
+      kind: 'reasoning',
+      targetAliases: ['quick response', '快速回應'],
+      verificationAliases: ['quick response', '快速回應'],
+      sleep: async () => {},
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.selected, '快速回應');
+    assert.deepEqual(result.available, ['快速回應']);
+  } finally {
+    global.document = previousDocument;
+    global.KeyboardEvent = previousKeyboardEvent;
+    global.MouseEvent = previousMouseEvent;
+    global.PointerEvent = previousPointerEvent;
+  }
+});
+
+test('stops M365 selection immediately on authentication redirect', async () => {
+  const previousDocument = global.document;
+  const previousWindow = global.window;
+  const previousKeyboardEvent = global.KeyboardEvent;
+  global.KeyboardEvent = class KeyboardEvent {};
+  global.window = { location: { hostname: 'login.microsoftonline.com', pathname: '/authorize' } };
+  global.document = {
+    dispatchEvent() {},
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  try {
+    const result = await selectProviderOption({
+      provider: 'm365',
+      kind: 'model',
+      targetAliases: ['GPT 5.6'],
+      verificationAliases: ['GPT 5.6'],
+      sleep: async () => {},
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /^authentication:/);
+  } finally {
+    global.document = previousDocument;
+    global.window = previousWindow;
+    global.KeyboardEvent = previousKeyboardEvent;
   }
 });

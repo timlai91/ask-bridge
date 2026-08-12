@@ -6,11 +6,11 @@ brand
 
 ## Users
 
-開發者與 AI Coding Agent 使用者：在終端機與 IDE 中工作，同時依賴 ChatGPT / Gemini 網站做探索性研究、摘要、文件分析與方案比較。他們的痛點是反覆在瀏覽器與終端機之間切換、複製貼上，且不想消耗主要 agent 額度在低風險的研究任務上。次要受眾是透過 Agent Skill 自主呼叫本工具的 coding agent 本身。
+開發者與 AI Coding Agent 使用者：在終端機與 IDE 中工作，同時依賴 ChatGPT、Gemini、Claude 或 Microsoft 365 Copilot 網站做探索性研究、摘要、文件分析與方案比較。他們的痛點是反覆在瀏覽器與終端機之間切換、複製貼上，且不想消耗主要 agent 額度在低風險的研究任務上。次要受眾是透過 Agent Skill 自主呼叫本工具的 coding agent 本身。
 
 ## Product Purpose
 
-`ask-bridge` 是一個以 Rust 撰寫的命令列研究橋接器：透過真實 Chrome 瀏覽器（CDP + MCP）自動操作 ChatGPT 或 Gemini 網站，把 prompt 送進網站、把回覆取回終端機。它讓主要 Coding Agent 專注於理解專案與修改程式，把探索性、可委派的研究工作交給網站型 AI，兩者的使用額度分開計算，開發者能更有彈性地分配 AI 資源。成功 = 開發者一行指令取得外部 AI 協助，且不離開本機工作流程。
+`ask-bridge` 是一個以 Rust 撰寫的命令列研究橋接器：透過真實 Chrome 瀏覽器（CDP + MCP）自動操作 ChatGPT、Gemini、Claude 與實驗性的 Microsoft 365 Copilot Chat，把 prompt 送進網站、把回覆取回終端機。它讓主要 Coding Agent 專注於理解專案與修改程式，把探索性、可委派的研究工作交給網站型 AI，兩者的使用額度分開計算，開發者能更有彈性地分配 AI 資源。M365 純文字能力維持跨平台；V2 session、picker、附件與圖片下載為 Windows-only experimental。這些都是既有 Microsoft 365 網頁 UI 能力，不代表工具取得 Microsoft Graph、郵件、會議、Teams、SharePoint 或額外 add-on 授權。成功 = 開發者一行指令取得外部 AI 協助，且不離開本機工作流程。
 
 ## Brand Personality
 

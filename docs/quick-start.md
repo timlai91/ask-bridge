@@ -1,10 +1,10 @@
 # 快速開始
 
-本文件說明如何安裝 `ask-bridge`，並透過 Chrome 自動操作 ChatGPT、Gemini 或 Claude。未設定全域 provider 時預設為 ChatGPT，可用 `--provider gemini`、`--provider claude` 或全域設定檔切換。
+本文件說明如何安裝 `ask-bridge`，並透過 Chrome 自動操作 ChatGPT、Gemini、Claude 或實驗性的 Microsoft 365 Copilot。未設定全域 provider 時預設為 ChatGPT，可用 `--provider gemini`、`--provider claude`、`--provider m365` 或全域設定檔切換。
 
 ## 前置需求
 
-- macOS，且已安裝 Cargo。
+- Windows、macOS 或 Linux/WSL，且從原始碼建置時已安裝 Cargo。
 - Shell 可使用 Node.js 與 `npx`。
 - 若希望 `make install` 在缺少 Google Chrome 時自動安裝 Chrome，需先安裝 Homebrew。
 
@@ -59,13 +59,22 @@ ask-bridge --provider claude login
 
 在瀏覽器視窗登入 claude.ai 後，回到終端機按 Enter。
 
+若要登入 Microsoft 365 Copilot：
+
+```sh
+ask-bridge --provider m365 login
+```
+
+在可見 Chrome 中完成 Microsoft Entra、MFA 或 Conditional Access 驗證。M365 會保存於相同的 ask-bridge 專屬 profile；工具不會繞過組織政策。
+
 ## 全域 provider 設定
 
-若希望未指定 `--provider` 時預設使用 Gemini 或 Claude，可執行：
+若希望未指定 `--provider` 時預設使用 Gemini、Claude 或 M365，可執行：
 
 ```sh
 ask-bridge config --provider gemini
 ask-bridge config --provider claude
+ask-bridge config --provider m365
 ```
 
 若要改回 ChatGPT：
@@ -86,6 +95,7 @@ ask-bridge config --provider chatgpt
 ask-bridge "用一段話解釋 Rust ownership。"
 ask-bridge --provider gemini "用一段話解釋 Rust ownership。"
 ask-bridge --provider claude "用一段話解釋 Rust ownership。"
+ask-bridge --provider m365 "用一段話解釋 Rust ownership。"
 ```
 
 一般提問預設會使用 headless Chrome，並把所選 provider 的回覆輸出到終端機。
@@ -111,6 +121,14 @@ ask-bridge "開始一個關於 async Rust 的新主題。" --new
 `--new` 會開啟新的所選 provider 對話，而不是重用既有的同 provider 分頁。
 執行前已存在的所有頁籤都會保留；若無法唯一辨識新分頁，命令會停止。
 
+M365 查詢完成後也會顯示目前頁面的 Thread Link。Windows-only experimental V2 採 URL-only session 設計，不支援 raw `--session-id`：
+
+```powershell
+ask-bridge --provider m365 --session-url "https://m365.cloud.microsoft/chat/conversation/<id>" "請接續此對話。"
+```
+
+macOS／Linux 目前保留 M365 純文字功能，但 V2 旗標會在 Chrome 啟動前失敗。
+
 ## 接續既有 provider 對話
 
 使用對話 ID：
@@ -125,8 +143,11 @@ ask-bridge --provider chatgpt --session-id "conversation-uuid" "請接續先前�
 ask-bridge --session-url "https://chatgpt.com/c/conversation-uuid" "請產出下一步計畫。"
 ```
 
-`--session`、`--session-id` 與 `--session-url` 是相同參數的別名，不能與
-`--new` 同時使用。完整 URL 會自動辨識 provider；既有頁籤都會保留。
+`--session`、`--session-id` 與 `--session-url` 是三個互斥參數，且都不能與
+`--new` 同時使用。`--session` 依值判定 URL 或 ID；`--session-id` 只接受 raw
+ID；`--session-url` 只接受完整 HTTPS URL。完整 URL 會自動辨識 provider；既有
+頁籤都會保留。此功能目前只支援 ChatGPT、Gemini 與 Claude；M365 仍會在開啟
+Chrome 前明確拒絕。
 
 ## 透過 pipe 傳入內容
 
@@ -142,15 +163,16 @@ cat README.md | ask-bridge "摘要這份文件。"
 
 ## 附上圖片或文件
 
-`ask-bridge` 支援把本機檔案當作附件直接上傳給所選 provider，不必透過 pipe 把內容塞進 prompt。Gemini 目前支援 `--file` 文件附件；`--image` 圖片輸入目前支援 ChatGPT 與 Claude。
+`ask-bridge` 支援把本機檔案當作附件直接上傳給所選 provider，不必透過 pipe 把內容塞進 prompt。Gemini 目前支援 `--file` 文件附件；`--image` 圖片輸入目前支援 ChatGPT 與 Claude。Windows-only experimental M365 V2 支援 PDF／DOCX／TXT 與 PNG／JPEG。
 
 ### 附上圖片
 
-使用 `--image`（可重複指定）。此功能目前支援 ChatGPT 與 Claude；搭配 `--provider gemini` 使用會立即回報錯誤。
+使用 `--image`（可重複指定）。此功能支援 ChatGPT、Claude，以及 Windows experimental M365 的 PNG／JPEG；搭配 `--provider gemini` 使用會立即回報錯誤。
 
 ```sh
 ask-bridge "請描述這張圖片。" --image screenshot.png
 ask-bridge "比較這兩張圖。" --image v1.png --image v2.png
+ask-bridge --provider m365 --new "請描述這張圖片。" --image screenshot.png
 ```
 
 ### 附上文件
@@ -161,6 +183,7 @@ ask-bridge "比較這兩張圖。" --image v1.png --image v2.png
 ask-bridge "請摘要這份 PDF。" --file report.pdf
 ask-bridge "這份 CSV 有幾筆資料？" --file data.csv
 ask-bridge "幫我檢查這段程式碼。" --file src/main.rs
+ask-bridge --provider m365 --new "請摘要這份文件。" --file report.pdf
 ```
 
 也可以同時附上圖片與文件：
@@ -179,6 +202,8 @@ ask-bridge "快速翻譯這段話。" --reasoning instant
 ask-bridge --provider gemini "用幾句話介紹 Rust。" --model "3.6 Flash"
 ask-bridge --provider gemini "證明這個數學問題。" --model "3.1 Pro" --reasoning extended
 ask-bridge --provider claude "用幾句話介紹 Rust。" --model Sonnet
+ask-bridge --provider m365 --new "快速回答。" --reasoning quick
+ask-bridge --provider m365 --new "使用指定模型回答。" --model "GPT 5.5"
 ```
 
 推理值：
@@ -186,6 +211,22 @@ ask-bridge --provider claude "用幾句話介紹 Rust。" --model Sonnet
 - **ChatGPT**：`auto`、`instant`、`medium`、`high`，亦接受對應中文別名。
 - **Gemini**：`extended`，只能單獨使用或搭配 Pro 模型。
 - **Claude**：不支援 `--reasoning`，原有 `--model` 行為不變。
+- **Microsoft 365 Copilot（Windows-only experimental）**：支援 `GPT 5.6`、`GPT 5.5`、`Sonnet`、`Opus`，以及 `auto`／`自動`、`quick`／`快速回應`、`think-deeper`／`深度思考`。model 與 reasoning 共用同一 control，不能併用；既有 conversation 無 picker 時請使用 `--new`。
+
+Windows 上的 M365 圖片下載必須明確指定 `--image-output`，未指定時不掃描或寫檔。DLP／policy blocked 尚未在專用租戶驗證；若政策阻擋，工具必須停止而不得改走 fallback。
+
+```powershell
+ask-bridge --provider m365 --image-output .\generated get "https://m365.cloud.microsoft/chat/conversation/<id>"
+```
+
+## 日後驗證 macOS
+
+取得 Mac 環境後，在獨立驗證分支進行：
+
+1. 執行 `cargo fmt --all -- --check`、`cargo test`、`cargo check`、`npm test`。
+2. 暫時將 `Provider::M365Copilot.capabilities_for_platform` 的 macOS V2 capability 開啟；不要直接發布該暫時變更。
+3. 使用專屬 Chrome profile，依 `m365-copilot.v2.task.md` 的 macOS en-US／zh-TW 矩陣測試 session URL、model、reasoning、PDF／DOCX／TXT、PNG／JPEG 與 `--image-output`。
+4. 記錄 selector、錯誤與實際輸出；確認後才把正式平台條件擴充至 macOS，並移除 Windows-only 文件限制。
 
 模型名稱只與 provider 選單的主標籤比對，忽略大小寫、標點、副標題與 badge；不會把舊版本名稱改選為其他版本。
 
