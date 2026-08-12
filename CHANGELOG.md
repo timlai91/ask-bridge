@@ -8,10 +8,10 @@
 - 新增 experimental `--provider m365`，透過 Microsoft 365 Copilot Chat 網頁 UI 支援 Microsoft Entra 手動登入、純文字 prompt、Markdown／純文字回覆、`--new`、`--output`、`--timeout`、Thread Link 與隱藏的 `open`／`get` 維護流程。
 - M365 回覆優先使用 Copy Response，剪貼簿不可用時改用 DOM Markdown scraper；支援標題、清單、粗斜體、inline code、code block、一般連結與 Copilot citation URL。
 - 新增集中式 provider capability matrix，M365 第一版會在 Chrome 啟動前明確拒絕 `--session`、`--model`、`--reasoning`、`--image`、`--file` 與 `--image-output`。
-- 完成 M365 V2 選配能力的 provider-specific 實作骨架：URL-only session 契約、model／reasoning selection kind、PDF／DOCX／TXT、PNG／JPEG、附件狀態與最新 assistant 生成圖片顯式下載。
+- 完成 M365 V2 選配能力的 provider-specific 實作骨架：URL-only session 契約、model／reasoning selection kind、保證 PDF／DOCX／TXT 並動態嘗試其他文件格式、PNG／JPEG、附件狀態與最新 assistant 生成圖片顯式下載。
 - Session CLI 改為可辨識來源且互斥的 `--session`、`--session-id`、`--session-url`；既有 ChatGPT、Gemini、Claude 仍支援 URL 與 raw ID。
-- 新增 M365 Node fixtures 與 Rust tests，覆蓋 nested picker、selected state、available options、附件 allowlist／`accept`、generated image 過濾、bytes 判型與防覆寫命名。
-- 在 Windows 開放 experimental M365 V2：URL-only session、model、reasoning、PDF／DOCX／TXT、PNG／JPEG 與顯式 generated-image download；macOS／Linux 對 V2 旗標維持 browser-before fail-fast。
+- 新增 M365 Node fixtures 與 Rust tests，覆蓋 nested picker、selected state、available options、附件保證格式／動態 `accept`、generated image 過濾、bytes 判型與防覆寫命名。
+- 在 Windows 開放 experimental M365 V2：URL-only session、model、reasoning、保證 PDF／DOCX／TXT 並依 `accept` 與租戶政策嘗試其他文件格式、PNG／JPEG 與顯式 generated-image download；macOS／Linux 對 V2 旗標維持 browser-before fail-fast。
 
 ### 🔧 修復 (Fixed)
 - M365 picker 與 upload control 會等待 hydration，避免新對話頁的暫態 `not found`。

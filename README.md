@@ -36,7 +36,7 @@
 - **思考動畫**：等待 provider 回覆時，在終端機顯示旋轉 spinner，開始輸出內容後自動清除。
 - **智慧分頁管理**：可重用既有 provider 分頁、聚焦分頁，或開啟新分頁，避免分頁過度增加。
 - **Pipe 與 stdin 支援**：支援透過 standard input 傳入 prompt，例如 `cat report.txt | ask-bridge "summarize this"`。
-- **圖片與文件上傳**：可透過 `--image`／`--file` 上傳附件；Windows experimental M365 V2 支援 PNG／JPEG 與 PDF／DOCX／TXT。
+- **圖片與文件上傳**：可透過 `--image`／`--file` 上傳附件；Windows experimental M365 V2 圖片支援 PNG／JPEG，文件保證 PDF／DOCX／TXT，其他格式依 M365 規則嘗試。
 - **模型與推理模式切換**：使用 `--model`／`--reasoning` 控制 provider 選項；M365 V2 僅在 Windows 開放。
 - **接續既有對話**：ChatGPT、Gemini 與 Claude 可使用 URL 或 ID；Windows 上的 experimental M365 V2 支援完整 conversation URL，但不支援 raw `--session-id`。
 - **回應超時**：使用 `--timeout <秒數>` 設定等待回應上限，預設為 `300` 秒。
@@ -209,7 +209,7 @@ M365 第一版支援純文字 prompt、文字／Markdown 回覆、`login`、`ope
 - 完整 conversation URL：`--session-url` 或 URL 型 `--session`；raw `--session-id` 不支援。
 - `--model`：`GPT 5.6`、`GPT 5.5`、`Sonnet`、`Opus`。
 - `--reasoning`：`auto`／`自動`、`quick`／`快速回應`、`think-deeper`／`深度思考`。
-- `--file`：PDF、DOCX、TXT。
+- `--file`：保證 PDF、DOCX、TXT；其他格式依 M365 當下的 `accept` 規則與租戶政策嘗試，不由 CLI 預先封鎖。
 - `--image`：PNG、JPEG。
 - `--image-output`：只在明確指定時下載最新 assistant turn 的生成圖片。
 
@@ -347,7 +347,7 @@ ask-bridge --provider m365 --new "請描述這張圖片。" --image screenshot.p
 
 #### 附上文件
 
-使用 `--file` 附上一或多份本機文件（可重複指定）。ChatGPT、Gemini 與 Claude 維持既有格式；Windows experimental M365 V2 僅支援 PDF、DOCX、TXT，不沿用其他 provider 的全域格式清單。
+使用 `--file` 附上一或多份本機文件（可重複指定）。ChatGPT、Gemini 與 Claude 維持既有格式。Windows experimental M365 V2 只保證支援 PDF／DOCX／TXT；其他格式依 M365 當下的 `accept` 規則與租戶政策嘗試上傳，不由 CLI 預先封鎖。
 
 ```bash
 ask-bridge "請摘要這份 PDF 的重點。" --file report.pdf

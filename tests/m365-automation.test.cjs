@@ -6,6 +6,7 @@ const test = require('node:test');
 const {
   acceptsFile,
   classifyAttachmentSignals,
+  classifyComposerPrompt,
   filterGeneratedImageDescriptors,
 } = require('../src/m365-automation.cjs');
 
@@ -16,6 +17,8 @@ test('matches M365 accept rules by MIME, wildcard, and extension', () => {
     name: '報告.DOCX',
     type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   }), true);
+  assert.equal(acceptsFile('.csv', { name: 'data.csv', type: 'text/csv' }), true);
+  assert.equal(acceptsFile('', { name: 'sample.custom', type: 'application/octet-stream' }), true);
   assert.equal(acceptsFile('.pdf', { name: 'brief.txt', type: 'text/plain' }), false);
 });
 
@@ -55,6 +58,33 @@ test('classifies attachment done, pending, error, policy, and authentication sta
     fileName: 'brief.pdf',
     authRedirect: true,
   }).status, 'authentication');
+});
+
+test('requires one exact M365 prompt before submission', () => {
+  assert.equal(classifyComposerPrompt('Explain this file', '').status, 'pending');
+  assert.equal(
+    classifyComposerPrompt('Explain this file', 'Explain this file').status,
+    'ready',
+  );
+  assert.deepEqual(
+    classifyComposerPrompt(
+      'Explain this file',
+      'Explain this fileExplain this file',
+    ),
+    {
+      status: 'duplicate',
+      expectedLength: 17,
+      actualLength: 34,
+      occurrences: 2,
+    },
+  );
+  assert.equal(
+    classifyComposerPrompt(
+      'line 1\nline 2',
+      'line 1\r\nline 2\u200b\u200c\u200d\u2060\ufeff',
+    ).status,
+    'ready',
+  );
 });
 
 test('keeps only generated images and excludes UI or user attachment images', () => {

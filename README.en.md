@@ -37,7 +37,7 @@ Unlike typical API clients, `ask-bridge` operates inside a real Chrome browser w
 - **🌀 TUI Thinking Animation**: Displays a rotating spinner while waiting for the provider to reply, then clears it once output starts.
 - **🧠 Intelligent Tab Management**: Reuses existing provider tabs if open, focuses them, or opens new ones, avoiding tab clutter.
 - **🖥️ Pipe & Stdin Support**: Supports piping prompts via `stdin` (e.g. `cat report.txt | ask-bridge "summarize this"`).
-- **📎 Image & File Attachments**: Upload attachments with `--image`/`--file`; Windows experimental M365 V2 supports PNG/JPEG and PDF/DOCX/TXT.
+- **📎 Image & File Attachments**: Upload attachments with `--image`/`--file`; Windows experimental M365 V2 supports PNG/JPEG images, guarantees PDF/DOCX/TXT files, and dynamically tries other file formats.
 - **🔀 Model and Reasoning Selection**: Use `--model`/`--reasoning` for provider options; M365 V2 is enabled only on Windows.
 - **Resume Conversations**: ChatGPT, Gemini, and Claude support URLs and IDs; Windows experimental M365 V2 supports full conversation URLs only.
 - **Response Timeout**: Use `--timeout <seconds>` to control how long to wait for a provider response, defaulting to `300` seconds.
@@ -211,7 +211,7 @@ The first M365 release supports text prompts, text or Markdown responses, `login
 - Full conversation URLs through `--session-url` or URL-form `--session`; raw `--session-id` remains unsupported.
 - Models `GPT 5.6`, `GPT 5.5`, `Sonnet`, and `Opus`.
 - Reasoning `auto`/`自動`, `quick`/`快速回應`, and `think-deeper`/`深度思考`.
-- PDF, DOCX, and TXT through `--file`.
+- PDF, DOCX, and TXT are guaranteed through `--file`; other formats are attempted according to the current M365 `accept` rules and tenant policy instead of being pre-blocked by the CLI.
 - PNG and JPEG through `--image`.
 - Explicit latest-assistant generated-image download through `--image-output`.
 
@@ -352,7 +352,7 @@ Supported formats include PNG, JPEG, GIF, WebP, SVG, BMP, and more.
 
 #### Attach documents
 
-Use `--file` (repeatable) to attach documents. ChatGPT, Gemini, and Claude retain their existing formats; Windows experimental M365 V2 supports only PDF, DOCX, and TXT.
+Use `--file` (repeatable) to attach documents. ChatGPT, Gemini, and Claude retain their existing formats. Windows experimental M365 V2 guarantees PDF, DOCX, and TXT; other formats are attempted according to the current M365 `accept` rules and tenant policy instead of being pre-blocked by the CLI.
 
 ```bash
 ask-bridge "Summarize this PDF." --file report.pdf

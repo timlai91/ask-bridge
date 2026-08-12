@@ -102,7 +102,7 @@ ask-bridge --provider m365 --new "開始一個新的研究對話。"
 | `--session-id` | 不支援 | V2 採 URL-only；不由 raw ID 重建 URL | 只有跨租戶證明 ID 足夠時才重新評估 |
 | `--model` | Windows-only experimental | en-US／zh-TW、nested picker、同列副標題與 selected-state 驗證已通過 | macOS、其他租戶待驗 |
 | `--reasoning` | Windows-only experimental | `Auto`／`Quick response`／`Think deeper` 與 zh-TW aliases、selection kind、衝突拒絕已通過 | macOS、其他租戶待驗 |
-| `--file` | Windows-only experimental | PDF、DOCX、TXT、進度、完成、remove、部分失敗與 retry 已通過 | DLP 未實站驗證，列已知限制 |
+| `--file` | Windows-only experimental | PDF、DOCX、TXT 保證支援；其他格式不由 CLI 預先封鎖，依 `accept` 與租戶政策判定 | DLP 未實站驗證，列已知限制 |
 | `--image` | Windows-only experimental | PNG、JPEG、preview、順序、混合附件、remove 與 retry 已通過 | DLP 未實站驗證，列已知限制 |
 | `--image-output` | Windows-only experimental | data URL PNG 寫檔、最新 assistant scope、bytes 判型、無圖片非零錯誤已通過 | HTTP/blob、DLP 與 macOS 待驗 |
 
@@ -396,7 +396,7 @@ selector 優先順序：
 
 - 優先使用可存取的 upload button 與 `upload_file`。
 - 驗證檔名 chip、上傳完成與失敗狀態。
-- 先支援 PDF、DOCX、TXT，再評估其他格式。
+- 只保證支援 PDF／DOCX／TXT；其他格式依 M365 當下的 `accept` 規則與租戶政策嘗試上傳，不由 CLI 預先封鎖。
 
 #### 3.3 Image attachment
 
@@ -418,7 +418,7 @@ selector 優先順序：
 - Reasoning 主選項：en-US `Auto`、`Quick response`、`Think deeper`；zh-TW `自動`、`快速回應`、`深度思考`。
 - Nested model 主選項：`GPT 5.6`、`GPT 5.5`、`Sonnet`、`Opus`。副標題例如 `Think deeper`、`Quick response`、`快速回應`、`OpenAI`、`Anthropic` 不屬於 model 名稱。
 - 當前帳號的上述選項均未呈現 `aria-disabled`、locked、premium 或 policy-blocked state；helper 仍需對 disabled／locked fail-closed，不能推論其他租戶相同。
-- Upload：`[data-testid="PlusMenuButton"]` → en-US `Upload images and files`／zh-TW `上傳影像和檔案`，hidden `input[type=file][multiple]`；第一批僅開放 PDF、DOCX、TXT 與 PNG、JPEG。
+- Upload：`[data-testid="PlusMenuButton"]` → en-US `Upload images and files`／zh-TW `上傳影像和檔案`，hidden `input[type=file][multiple]`；文件只保證 PDF／DOCX／TXT，其他格式依當下 `accept` 與租戶政策嘗試，圖片維持 PNG／JPEG。
 - zh-TW 附件：Unicode 檔名 chip 保持原名，remove button 為 `移除附件 <filename>`。
 - 附件完成訊號：composer scope 出現檔名 chip 與 `Remove attachment <filename>`；圖片另有檔名與 preview。
 - 多附件：兩張 PNG 依指定順序顯示；圖片＋文件混合可同時完成。Unicode／長檔名可顯示；兩個不同路徑但同名的檔案只呈現單一 chip，因此 V2 不宣稱同名檔可獨立識別。

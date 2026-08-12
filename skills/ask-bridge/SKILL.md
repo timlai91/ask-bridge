@@ -200,7 +200,7 @@ prompt + "\n\n" + stdin
 | `-o`, `--output <FILE>` | 將最終 Markdown 回覆寫入檔案 | 同時仍會在終端機輸出渲染結果；適合保留研究紀錄 |
 | `-i`, `--image-output <IMAGE_PATH>` | 下載 provider 回覆中的生成圖片 | Windows experimental M365 必須顯式指定；未指定時不得掃描或寫檔 |
 | `--image <IMAGE_FILE>` | 附加圖片檔，可重複指定 | 支援 ChatGPT 與 Claude；Windows experimental M365 支援 PNG／JPEG |
-| `--file <FILE>` | 附加文件檔，可重複指定 | ChatGPT、Gemini 與 Claude 可用；Windows experimental M365 僅支援 PDF／DOCX／TXT |
+| `--file <FILE>` | 附加文件檔，可重複指定 | ChatGPT、Gemini 與 Claude 可用；Windows experimental M365 保證 PDF／DOCX／TXT，其他格式依 `accept` 與租戶政策嘗試 |
 | `--timeout <SECONDS>` | 設定等待上限 | 必須是大於 0 的整數，預設 `300` 秒；同時套用於一般回覆與 `login` 登入偵測 |
 | `--model <MODEL>` | 送出 prompt 前切換模型 | Windows experimental M365 支援 `GPT 5.6`、`GPT 5.5`、`Sonnet`、`Opus` |
 | `--reasoning <REASONING>` | 切換 provider 推理模式 | ChatGPT 支援四種值；Gemini 支援 `extended`；Windows experimental M365 支援 `auto`／`自動`、`quick`／`快速回應`、`think-deeper`／`深度思考`；Claude 不支援 |
@@ -466,7 +466,7 @@ ask-bridge --headless=false screenshot
 
 Gemini 圖片輸入不支援時，改用 ChatGPT 或 Claude，或改以文字描述圖片內容。不要把同一個失敗命令無限制重試。
 
-M365 純文字功能維持跨平台；V2 為 Windows-only experimental。Windows 可使用 URL-only session、picker、PDF／DOCX／TXT、PNG／JPEG 與顯式圖片下載；macOS／Linux 對 V2 旗標 fail-fast。若登入狀態為 Unknown、token 過期、需要 MFA 或遇到 Conditional Access，執行 `ask-bridge --provider m365 login` 並由使用者在可見 Chrome 中完成驗證。DLP 尚未完成專用租戶驗證；任何 policy denial 都必須停止，不得改走 DataTransfer、canvas、paste 或其他繞過路徑。
+M365 純文字功能維持跨平台；V2 為 Windows-only experimental。Windows 可使用 URL-only session、picker、PNG／JPEG、保證支援的 PDF／DOCX／TXT、依 `accept` 與租戶政策動態嘗試的其他文件格式，以及顯式圖片下載；macOS／Linux 對 V2 旗標 fail-fast。若登入狀態為 Unknown、token 過期、需要 MFA 或遇到 Conditional Access，執行 `ask-bridge --provider m365 login` 並由使用者在可見 Chrome 中完成驗證。DLP 尚未完成專用租戶驗證；任何 policy denial 都必須停止，不得改走 DataTransfer、canvas、paste 或其他繞過路徑。
 
 模型切換失敗時，移除 `--model` 或改用 provider 預設模型，不要猜測替代模型名稱。
 

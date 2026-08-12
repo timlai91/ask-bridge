@@ -30,7 +30,7 @@
 - [x] 只有 conversation ID 可穩定重建 URL 時，才支援 M365 raw `--session-id`。（目前無法安全證明，故明確維持不支援）
 - [x] `--model` 可選擇 M365 UI 實際提供的模型或 mode，並驗證最終 selected state。（Windows-only experimental）
 - [x] `--reasoning` 只映射到實際存在、可獨立切換且語意明確的 M365 reasoning control。（Windows-only experimental）
-- [x] `--file` 第一批支援 PDF、DOCX、TXT，並驗證上傳完成、移除與錯誤。（Windows-only experimental；DLP 實站驗證本次豁免並列已知限制）
+- [x] `--file` 只保證支援 PDF／DOCX／TXT；其他格式依 M365 當下的 `accept` 規則與租戶政策嘗試上傳，不由 CLI 預先封鎖。（Windows-only experimental；DLP 實站驗證本次豁免並列已知限制）
 - [x] `--image` 至少支援實測通過的 PNG／JPEG，並驗證預覽、上傳完成與移除。（Windows-only experimental；DLP 實站驗證本次豁免並列已知限制）
 - [x] `--image-output` 可下載最新 M365 assistant turn 中實際生成的圖片，不誤抓 avatar、citation、來源卡片或一般網頁圖片。（Windows-only experimental）
 - [x] M365 不得在未指定 `--image-output` 時自動持久化企業圖片資料。
@@ -47,7 +47,7 @@
 | `--session` | Windows-only experimental | 接受已驗證 URL；不接受 raw ID | macOS 待驗 |
 | `--model` | Windows-only experimental | 支援實際 UI picker | macOS／其他租戶待驗 |
 | `--reasoning` | Windows-only experimental | 支援實際 reasoning control | macOS／其他租戶待驗 |
-| `--file` | Windows-only experimental | PDF、DOCX、TXT | DLP 未驗證，列已知限制 |
+| `--file` | Windows-only experimental | 保證 PDF、DOCX、TXT；其他格式動態嘗試 | DLP 未驗證，列已知限制 |
 | `--image` | Windows-only experimental | PNG、JPEG | DLP 未驗證，列已知限制 |
 | `--image-output` | Windows-only experimental | 明確要求時下載生成圖片 | HTTP/blob、DLP、macOS 待驗 |
 
@@ -326,7 +326,7 @@
 
 ### 10.2 格式與驗證
 
-- [x] 第一批只開放 PDF、DOCX、TXT。
+- [x] 只保證支援 PDF／DOCX／TXT；其他格式依 M365 當下的 `accept` 規則與租戶政策嘗試上傳，不由 CLI 預先封鎖。
 - [x] 在讀取完整檔案前驗證存在、regular file、格式與可取得的大小限制。
 - [x] MIME 判定同時考量副檔名與 M365 input `accept` 規則。
 - [x] `accept` matcher 支援 MIME、wildcard 與 `.ext` 形式。
@@ -338,7 +338,7 @@
 ### 10.3 File errors
 
 - [x] file not found／permission denied 在 Chrome 前失敗。
-- [x] unsupported extension 列出 M365 V2 支援格式。
+- [x] M365 input `accept` 不接受時回報由目前 UI 規則拒絕，不將其他文件格式在 CLI 前置檢查中封鎖。
 - [x] upload control not found 指出可能為 UI rollout。
 - [x] upload timeout 指出未送出 prompt。
 - [x] DLP／租戶政策顯示可見摘要，不輸出敏感內容。
@@ -346,8 +346,8 @@
 
 ### 10.4 File tests
 
-- [x] Rust tests：PDF／DOCX／TXT allowlist。
-- [x] Rust tests：不支援格式、空路徑、目錄與不存在檔案。
+- [x] Rust tests：PDF／DOCX／TXT 簽章保證與其他文件格式 pass-through。
+- [x] Rust tests：圖片不支援格式、文件簽章錯誤、空路徑、目錄與不存在檔案。
 - [x] Node 或純 helper tests：M365 attachment chip、progress、done、error、remove。
 - [ ] Windows／macOS 各測 PDF、DOCX、TXT。（Windows en-US 三種格式已通過）
 - [x] 多檔、同名檔、長檔名與 Unicode 檔名。（同名檔實站只呈現單一 chip，已記錄為限制）
@@ -356,7 +356,7 @@
 ### 10.5 File 文件與開放閘門
 
 - [x] 更新 capability、README、README.en、quick start、Skill、網站與 CHANGELOG。
-- [x] 文件只列 PDF、DOCX、TXT，其他格式不得沿用全域附件清單宣稱支援。
+- [x] 文件只保證 PDF／DOCX／TXT；其他格式明確標示依 M365 當下的 `accept` 規則與租戶政策嘗試，不宣稱固定支援。
 - [x] 三種格式在必要平台通過後才設定 `files=true`。（必要平台限定 Windows）
 
 ## 11. Phase V2-6：M365 Image attachment
@@ -577,8 +577,8 @@
    - JS helper、selected state、available options、tests、docs。
 5. [x] `feat(m365): 支援 reasoning picker`
    - ReasoningRequest、compatibility、tests、docs。
-6. [x] `feat(m365): 支援 PDF DOCX TXT 附件`
-   - MCP upload_file、chip、progress、DLP、tests、docs。
+6. [x] `feat(m365): 支援動態文件附件格式`
+   - 保證 PDF／DOCX／TXT，其他格式依 M365 `accept` 與租戶政策嘗試；包含 MCP upload_file、chip、progress、DLP、tests、docs。
 7. [x] `feat(m365): 支援圖片附件`
    - Preview、完成、移除、DLP、tests、docs。
 8. [x] `feat(m365): 支援顯式生成圖片下載`

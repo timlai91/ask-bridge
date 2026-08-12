@@ -163,7 +163,7 @@ cat README.md | ask-bridge "摘要這份文件。"
 
 ## 附上圖片或文件
 
-`ask-bridge` 支援把本機檔案當作附件直接上傳給所選 provider，不必透過 pipe 把內容塞進 prompt。Gemini 目前支援 `--file` 文件附件；`--image` 圖片輸入目前支援 ChatGPT 與 Claude。Windows-only experimental M365 V2 支援 PDF／DOCX／TXT 與 PNG／JPEG。
+`ask-bridge` 支援把本機檔案當作附件直接上傳給所選 provider，不必透過 pipe 把內容塞進 prompt。Gemini 目前支援 `--file` 文件附件；`--image` 圖片輸入目前支援 ChatGPT 與 Claude。Windows-only experimental M365 V2 圖片支援 PNG／JPEG；文件只保證 PDF／DOCX／TXT，其他格式依 M365 當下的 `accept` 規則與租戶政策嘗試上傳，不由 CLI 預先封鎖。
 
 ### 附上圖片
 

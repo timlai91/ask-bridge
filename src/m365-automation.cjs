@@ -11,6 +11,45 @@
     return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   }
 
+  function normalizePromptText(value) {
+    return String(value || '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[\u200b-\u200d\u2060\ufeff]/g, '')
+      .trim();
+  }
+
+  function classifyComposerPrompt(prompt, composerText) {
+    const expected = normalizePromptText(prompt);
+    const actual = normalizePromptText(composerText);
+    const occurrences = expected
+      ? actual.split(expected).length - 1
+      : 0;
+
+    if (!actual) {
+      return {
+        status: 'pending',
+        expectedLength: expected.length,
+        actualLength: 0,
+        occurrences,
+      };
+    }
+    if (actual === expected) {
+      return {
+        status: 'ready',
+        expectedLength: expected.length,
+        actualLength: actual.length,
+        occurrences: 1,
+      };
+    }
+    return {
+      status: occurrences > 1 ? 'duplicate' : 'mismatch',
+      expectedLength: expected.length,
+      actualLength: actual.length,
+      occurrences,
+    };
+  }
+
   function acceptsFile(accept, file) {
     const rules = String(accept || '')
       .split(',')
@@ -205,9 +244,11 @@
   return {
     acceptsFile,
     classifyAttachmentSignals,
+    classifyComposerPrompt,
     filterGeneratedImageDescriptors,
     generatedImagesFromLatestTurn,
     inspectAttachment,
     normalizeText,
+    normalizePromptText,
   };
 });

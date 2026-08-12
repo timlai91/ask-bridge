@@ -948,7 +948,8 @@ struct Cli {
     images: Vec<String>,
 
     /// Attach one or more local document files (PDF, Word, Excel, text, etc.) to the prompt
-    /// (can be specified multiple times). M365 supports PDF/DOCX/TXT on Windows (experimental).
+    /// (can be specified multiple times). M365 guarantees PDF/DOCX/TXT and dynamically tries
+    /// other formats accepted by its UI on Windows (experimental).
     #[arg(long = "file", value_name = "FILE", num_args = 1)]
     files: Vec<String>,
 
@@ -2704,6 +2705,14 @@ fn find_snapshot_uid(snapshot: &str, include: &[&str], exclude: &[&str]) -> Opti
     })
 }
 
+fn find_m365_composer_uid(snapshot: &str) -> Option<String> {
+    find_snapshot_uid(
+        snapshot,
+        &["textbox", "copilot"],
+        &["search", "搜尋", "搜索"],
+    )
+}
+
 fn is_glow_available() -> bool {
     Command::new("glow")
         .arg("--version")
@@ -3634,6 +3643,15 @@ mod tests {
     }
 
     #[test]
+    fn finds_m365_composer_uid_without_matching_search() {
+        let snapshot = r#"
+            - textbox "Search Microsoft 365 Copilot" [uid="1_20"]
+            - textbox "傳送訊息給 Copilot" [uid="1_21"]
+        "#;
+        assert_eq!(find_m365_composer_uid(snapshot), Some("1_21".to_string()));
+    }
+
+    #[test]
     fn rejects_gemini_image_attachments() {
         let cli = Cli::try_parse_from([
             "ask-bridge",
@@ -3952,7 +3970,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_m365_attachment_allowlists_and_signatures() {
+    fn validates_m365_attachment_guarantees_and_passthrough() {
         let root = make_test_dir("m365_attachments");
         std::fs::create_dir_all(&root).unwrap();
         let png = root.join("sample.png");
@@ -3960,11 +3978,15 @@ mod tests {
         let pdf = root.join("sample.pdf");
         let docx = root.join("sample.docx");
         let text = root.join("sample.txt");
+        let csv = root.join("sample.csv");
+        let custom = root.join("sample.custom");
         std::fs::write(&png, b"\x89PNG\r\n\x1a\npayload").unwrap();
         std::fs::write(&jpeg, [0xff, 0xd8, 0xff, 0xe0]).unwrap();
         std::fs::write(&pdf, b"%PDF-1.7\n").unwrap();
         std::fs::write(&docx, b"PK\x03\x04").unwrap();
         std::fs::write(&text, b"safe fixture").unwrap();
+        std::fs::write(&csv, b"name,value\nsample,1").unwrap();
+        std::fs::write(&custom, b"provider-defined format").unwrap();
 
         for path in [&png, &jpeg] {
             validate_attachment_path(
@@ -3974,7 +3996,7 @@ mod tests {
             )
             .unwrap();
         }
-        for path in [&pdf, &docx, &text] {
+        for path in [&pdf, &docx, &text, &csv, &custom] {
             validate_attachment_path(
                 Provider::M365Copilot,
                 AttachmentKind::File,
@@ -3988,18 +4010,24 @@ mod tests {
     fn rejects_invalid_m365_attachment_paths_and_content() {
         let root = make_test_dir("m365_invalid_attachments");
         std::fs::create_dir_all(&root).unwrap();
-        let unsupported = root.join("sample.csv");
+        let unsupported_image = root.join("sample.gif");
         let empty_image = root.join("empty.png");
         let corrupt_image = root.join("corrupt.jpg");
+        let corrupt_pdf = root.join("corrupt.pdf");
+        let corrupt_docx = root.join("corrupt.docx");
         let missing = root.join("missing.pdf");
-        std::fs::write(&unsupported, b"a,b").unwrap();
+        std::fs::write(&unsupported_image, b"GIF89a").unwrap();
         std::fs::write(&empty_image, b"").unwrap();
         std::fs::write(&corrupt_image, b"not-a-jpeg").unwrap();
+        std::fs::write(&corrupt_pdf, b"not-a-pdf").unwrap();
+        std::fs::write(&corrupt_docx, b"not-a-docx").unwrap();
 
         for (kind, path) in [
-            (AttachmentKind::File, unsupported.as_path()),
+            (AttachmentKind::Image, unsupported_image.as_path()),
             (AttachmentKind::Image, empty_image.as_path()),
             (AttachmentKind::Image, corrupt_image.as_path()),
+            (AttachmentKind::File, corrupt_pdf.as_path()),
+            (AttachmentKind::File, corrupt_docx.as_path()),
             (AttachmentKind::File, root.as_path()),
             (AttachmentKind::File, missing.as_path()),
         ] {
@@ -4022,6 +4050,12 @@ mod tests {
         assert!(accept_rule_matches(
             ".docx,.txt",
             "REPORT.DOCX",
+            "application/octet-stream"
+        ));
+        assert!(accept_rule_matches(".csv", "data.csv", "text/csv"));
+        assert!(accept_rule_matches(
+            "",
+            "sample.custom",
             "application/octet-stream"
         ));
         assert!(!accept_rule_matches(".pdf", "brief.txt", "text/plain"));
@@ -6204,11 +6238,8 @@ fn attachment_basename(path: &str) -> &str {
         .unwrap_or("<attachment>")
 }
 
-fn m365_extension_allowed(kind: AttachmentKind, extension: &str) -> bool {
-    match kind {
-        AttachmentKind::Image => matches!(extension, "png" | "jpg" | "jpeg"),
-        AttachmentKind::File => matches!(extension, "pdf" | "docx" | "txt"),
-    }
+fn m365_image_extension_allowed(extension: &str) -> bool {
+    matches!(extension, "png" | "jpg" | "jpeg")
 }
 
 fn validate_m365_file_signature(
@@ -6222,7 +6253,8 @@ fn validate_m365_file_signature(
         (AttachmentKind::File, "pdf") => header.starts_with(b"%PDF-"),
         (AttachmentKind::File, "docx") => header.starts_with(b"PK"),
         (AttachmentKind::File, "txt") => true,
-        _ => false,
+        (AttachmentKind::File, _) => return Ok(()),
+        (AttachmentKind::Image, _) => false,
     };
     valid.then_some(()).ok_or_else(|| {
         format!(
@@ -6268,13 +6300,9 @@ fn validate_attachment_path(
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if !m365_extension_allowed(kind, &extension) {
-        let formats = match kind {
-            AttachmentKind::Image => "PNG, JPEG",
-            AttachmentKind::File => "PDF, DOCX, TXT",
-        };
+    if kind == AttachmentKind::Image && !m365_image_extension_allowed(&extension) {
         return Err(format!(
-            "{}: unsupported extension for '{}'. Microsoft 365 Copilot V2 supports {formats}.",
+            "{}: unsupported extension for '{}'. Microsoft 365 Copilot V2 supports PNG and JPEG images.",
             kind.stage_name(),
             basename
         ));
@@ -7569,6 +7597,156 @@ fn submit_regular_prompt(
     wait_for_submit_status(config_path)
 }
 
+fn submit_m365_prompt(config_path: &str, prompt: &str) -> Result<String, String> {
+    let snapshot = take_snapshot_text(config_path)?;
+    let composer_uid = find_m365_composer_uid(&snapshot)
+        .ok_or_else(|| "M365 composer textbox not found in page snapshot".to_string())?;
+    call_mcp_tool(
+        config_path,
+        "fill",
+        serde_json::json!({
+            "uid": composer_uid,
+            "value": prompt,
+            "includeSnapshot": false
+        }),
+    )
+    .map_err(|error| format!("M365 composer fill failed: {error}"))?;
+
+    let prompt_json = serde_json::to_string(prompt)
+        .map_err(|error| format!("Failed to serialize prompt text: {error}"))?;
+    let helper = include_str!("m365-automation.cjs");
+    let submit_js = format!(
+        r#"() => {{
+            window.__submit_status = 'pending';
+            (async () => {{
+                try {{
+                    {helper}
+                    const prompt = {prompt_json};
+                    const composerSelectors = {};
+                    const sendSelectors = {};
+                    const stopSelectors = {};
+                    const sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
+                    const isVisible = (element) => {{
+                        if (!element || element.disabled || element.getAttribute('aria-disabled') === 'true') {{
+                            return false;
+                        }}
+                        const style = window.getComputedStyle(element);
+                        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {{
+                            return false;
+                        }}
+                        const rect = element.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    }};
+                    const findComposer = () => composerSelectors
+                        .map((selector) => document.querySelector(selector))
+                        .find(Boolean);
+                    const readComposerText = () => {{
+                        const composer = findComposer();
+                        return composer
+                            ? (composer.innerText || composer.textContent || '')
+                            : '';
+                    }};
+                    const findVisibleButton = (selectors) => selectors
+                        .map((selector) => document.querySelector(selector))
+                        .find(isVisible);
+
+                    let readySamples = 0;
+                    let stableMismatch = '';
+                    let stableMismatchSamples = 0;
+                    for (let attempt = 0; attempt < 100; attempt += 1) {{
+                        const inspection = globalThis.AskBridgeM365Automation
+                            .classifyComposerPrompt(prompt, readComposerText());
+                        if (inspection.status === 'ready') {{
+                            readySamples += 1;
+                            stableMismatch = '';
+                            stableMismatchSamples = 0;
+                            if (readySamples >= 2) break;
+                        }} else {{
+                            readySamples = 0;
+                            if (inspection.status === 'duplicate') {{
+                                window.__submit_status =
+                                    'error: M365 composer contains a duplicated prompt; submission was cancelled';
+                                return;
+                            }}
+                            if (inspection.status === 'mismatch') {{
+                                const signature = JSON.stringify(inspection);
+                                if (signature === stableMismatch) {{
+                                    stableMismatchSamples += 1;
+                                }} else {{
+                                    stableMismatch = signature;
+                                    stableMismatchSamples = 1;
+                                }}
+                                if (stableMismatchSamples >= 5) {{
+                                    window.__submit_status =
+                                        'error: M365 composer text did not match the requested prompt';
+                                    return;
+                                }}
+                            }}
+                        }}
+                        await sleep(100);
+                    }}
+                    if (readySamples < 2) {{
+                        window.__submit_status =
+                            'error: M365 composer did not stabilize with the requested prompt';
+                        return;
+                    }}
+
+                    let sendButton = null;
+                    for (let attempt = 0; attempt < 100; attempt += 1) {{
+                        sendButton = findVisibleButton(sendSelectors);
+                        if (sendButton) break;
+                        await sleep(100);
+                    }}
+                    if (!sendButton) {{
+                        window.__submit_status =
+                            'error: M365 Send button did not become active/enabled';
+                        return;
+                    }}
+
+                    sendButton.click();
+                    for (let attempt = 0; attempt < 100; attempt += 1) {{
+                        await sleep(100);
+                        const composer = findComposer();
+                        const composerText = composer
+                            ? globalThis.AskBridgeM365Automation.normalizePromptText(
+                                composer.innerText || composer.textContent || ''
+                            )
+                            : '';
+                        const stopButton = findVisibleButton(stopSelectors);
+                        if (!composer || composerText.length === 0 || stopButton) {{
+                            window.__submit_status = 'success:{{"clicked":true,"accepted":true}}';
+                            return;
+                        }}
+                    }}
+
+                    window.__submit_status =
+                        'error: M365 did not accept the Send button click';
+                }} catch (error) {{
+                    window.__submit_status = 'error: ' + error.message;
+                }}
+            }})();
+            return true;
+        }}"#,
+        Provider::M365Copilot.composer_selectors_json(),
+        Provider::M365Copilot.send_button_selectors_json(),
+        Provider::M365Copilot.stop_button_selectors_json(),
+    );
+
+    let start_res = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({
+            "function": submit_js
+        }),
+    )?;
+    let start_parsed = parse_script_result(&start_res)?;
+    if !start_parsed.as_bool().unwrap_or(false) {
+        return Err("Failed to initiate M365 prompt submission script".to_string());
+    }
+
+    wait_for_submit_status(config_path)
+}
+
 fn submit_chatgpt_agent_prompt(
     config_path: &str,
     parts: &ChatGptAgentPrompt<'_>,
@@ -7740,6 +7918,9 @@ fn submit_prompt_to_provider(
         && let Some(parts) = parse_chatgpt_agent_prompt(prompt)
     {
         return submit_chatgpt_agent_prompt(config_path, &parts, verbose);
+    }
+    if provider == Provider::M365Copilot {
+        return submit_m365_prompt(config_path, prompt);
     }
 
     submit_regular_prompt(config_path, provider, prompt)
