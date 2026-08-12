@@ -7662,11 +7662,51 @@ fn submit_m365_prompt(config_path: &str, prompt: &str) -> Result<String, String>
         "fill",
         serde_json::json!({
             "uid": composer_uid,
-            "value": prompt,
+            "value": "",
             "includeSnapshot": false
         }),
     )
-    .map_err(|error| format!("M365 composer fill failed: {error}"))?;
+    .map_err(|error| format!("M365 composer clear failed: {error}"))?;
+
+    let focus_res = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({
+            "function": r#"() => {
+                const composer = document.querySelector('#m365-chat-editor-target-element')
+                    || document.querySelector('[role="textbox"][contenteditable="true"][aria-label*="Copilot"]');
+                if (!composer) return { ok: false, error: 'composer not found' };
+                const text = (composer.innerText || composer.textContent || '')
+                    .replace(/[\u200b-\u200d\u2060\ufeff]/g, '')
+                    .trim();
+                if (text.length > 0) {
+                    return { ok: false, error: 'composer could not be cleared before typing' };
+                }
+                composer.focus();
+                return { ok: true };
+            }"#
+        }),
+    )?;
+    let focus_parsed = parse_script_result(&focus_res)?;
+    if !focus_parsed
+        .get("ok")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(focus_parsed
+            .get("error")
+            .and_then(|value| value.as_str())
+            .unwrap_or("failed to focus M365 composer")
+            .to_string());
+    }
+    call_mcp_tool(
+        config_path,
+        "type_text",
+        serde_json::json!({
+            "text": prompt
+        }),
+    )
+    .map_err(|error| format!("M365 composer text entry failed: {error}"))?;
 
     let prompt_json = serde_json::to_string(prompt)
         .map_err(|error| format!("Failed to serialize prompt text: {error}"))?;
